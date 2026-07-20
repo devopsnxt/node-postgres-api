@@ -1,0 +1,214 @@
+name: node-postgres-api Pipeline
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  push:
+    branches: [main]
+
+env:
+  APP_NAME: node-postgres-api
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/node-postgres-api
+
+jobs:
+  pull-request:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run lint (if present)
+        run: npm run lint --if-present
+
+      - name: Run tests (if present)
+        run: npm test --if-present
+
+      - name: Run Snyk scan
+        if: ${{ secrets.SNYK_TOKEN != '' }}
+        run: |
+          npx snyk test --all-projects --project-name=node-postgres-api
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+      - name: Run SonarCloud scan
+        if: ${{ secrets.SONAR_TOKEN != '' }}
+        uses: sonarsource/sonarcloud-github-action@v1
+        with:
+          organization: ${{ secrets.SONAR_ORGANIZATION }}
+          projectKey: ${{ secrets.SONAR_PROJECT_KEY }}
+          token: ${{ secrets.SONAR_TOKEN }}
+          extraProperties: |
+            sonar.sources=.
+            sonar.tests=.
+            sonar.projectName=node-postgres-api
+
+      - name: Build Docker image for PR validation
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+
+      - name: Generate image SBOM
+        uses: anchore/syft-action@v2
+        with:
+          target: docker:${{ env.GHCR_IMAGE }}:${{ github.sha }}
+          output: cyclonedx-json
+          file: image-sbom.json
+
+      - name: Scan Docker image
+        uses: aquasecurity/trivy-action@v0.9.4
+        with:
+          scan-type: image
+          image-ref: ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+          format: json
+          output: image-scan.json
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Upload image scan artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-scan-artifacts
+          path: |
+            image-sbom.json
+            image-scan.json
+
+      - name: Comment PR with build summary
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            **node-postgres-api CI completed**
+
+            - Commit: `${{ github.sha }}`
+            - Build image: `${{ env.GHCR_IMAGE }}:${{ github.sha }}`
+            - Tests: completed
+            - Pipeline: pull request validation
+
+  fast-forward-merge:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run lint (if present)
+        run: npm run lint --if-present
+
+      - name: Run tests (if present)
+        run: npm test --if-present
+
+      - name: Run Snyk scan
+        if: ${{ secrets.SNYK_TOKEN != '' }}
+        run: |
+          npx snyk test --all-projects --project-name=node-postgres-api
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+      - name: Run SonarCloud scan
+        if: ${{ secrets.SONAR_TOKEN != '' }}
+        uses: sonarsource/sonarcloud-github-action@v1
+        with:
+          organization: ${{ secrets.SONAR_ORGANIZATION }}
+          projectKey: ${{ secrets.SONAR_PROJECT_KEY }}
+          token: ${{ secrets.SONAR_TOKEN }}
+          extraProperties: |
+            sonar.sources=.
+            sonar.tests=.
+            sonar.projectName=node-postgres-api
+
+      - name: Build Docker image for release
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+
+      - name: Generate image SBOM
+        uses: anchore/syft-action@v2
+        with:
+          target: docker:${{ env.GHCR_IMAGE }}:${{ github.sha }}
+          output: cyclonedx-json
+          file: image-sbom.json
+
+      - name: Scan Docker image
+        uses: aquasecurity/trivy-action@v0.9.4
+        with:
+          scan-type: image
+          image-ref: ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+          format: json
+          output: image-scan.json
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Upload image scan artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-scan-artifacts
+          path: |
+            image-sbom.json
+            image-scan.json
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Docker image to GHCR
+        run: |
+          docker push ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v2
+        with:
+          version: '2.2.0'
+
+      - name: Sign GHCR image and attach SBOM
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          echo "$COSIGN_PRIVATE_KEY" > cosign.key
+          chmod 600 cosign.key
+          cosign public-key --key cosign.key cosign.pub
+          cosign sign --key cosign.key ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+          cosign attach sbom --sbom image-sbom.json ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+          cosign verify --key cosign.pub ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+          cosign verify-attestation --key cosign.pub --type sbom ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+
+      - name: Create GitHub release
+        if: ${{ success() }}
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: release-${{ github.sha }}
+          name: Release ${{ github.sha }}
+          body: |
+            Release version: `${{ github.sha }}`
+            Published image: `${{ env.GHCR_IMAGE }}:${{ github.sha }}`
+            Released by GitHub Actions pipeline.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
