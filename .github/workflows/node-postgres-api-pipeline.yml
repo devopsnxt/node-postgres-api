@@ -33,19 +33,21 @@ jobs:
         run: npm test --if-present
 
       - name: Run Snyk scan
-        if: ${{ secrets.SNYK_TOKEN != '' }}
-        run: |
-          npx snyk test --all-projects --project-name=node-postgres-api
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        if: ${{ env.SNYK_TOKEN != '' }}
+        run: |
+          npx snyk test --all-projects --project-name=node-postgres-api
 
       - name: Run SonarCloud scan
-        if: ${{ secrets.SONAR_TOKEN != '' }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        if: ${{ env.SONAR_TOKEN != '' }}
         uses: sonarsource/sonarcloud-github-action@v1
         with:
           organization: ${{ secrets.SONAR_ORGANIZATION }}
           projectKey: ${{ secrets.SONAR_PROJECT_KEY }}
-          token: ${{ secrets.SONAR_TOKEN }}
+          token: ${{ env.SONAR_TOKEN }}
           extraProperties: |
             sonar.sources=.
             sonar.tests=.
@@ -120,19 +122,21 @@ jobs:
         run: npm test --if-present
 
       - name: Run Snyk scan
-        if: ${{ secrets.SNYK_TOKEN != '' }}
-        run: |
-          npx snyk test --all-projects --project-name=node-postgres-api
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        if: ${{ env.SNYK_TOKEN != '' }}
+        run: |
+          npx snyk test --all-projects --project-name=node-postgres-api
 
       - name: Run SonarCloud scan
-        if: ${{ secrets.SONAR_TOKEN != '' }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        if: ${{ env.SONAR_TOKEN != '' }}
         uses: sonarsource/sonarcloud-github-action@v1
         with:
           organization: ${{ secrets.SONAR_ORGANIZATION }}
           projectKey: ${{ secrets.SONAR_PROJECT_KEY }}
-          token: ${{ secrets.SONAR_TOKEN }}
+          token: ${{ env.SONAR_TOKEN }}
           extraProperties: |
             sonar.sources=.
             sonar.tests=.
