@@ -53,6 +53,7 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           JAVA_HOME: ${{ steps.setup-java.outputs.java-home }}
+          SONAR_SCANNER_JRE: ${{ steps.setup-java.outputs.java-home }}
         if: ${{ env.SONAR_TOKEN != '' }}
         uses: sonarsource/sonarcloud-github-action@v1
         with:
@@ -150,6 +151,7 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           JAVA_HOME: ${{ steps.setup-java.outputs.java-home }}
+          SONAR_SCANNER_JRE: ${{ steps.setup-java.outputs.java-home }}
         if: ${{ env.SONAR_TOKEN != '' }}
         uses: sonarsource/sonarcloud-github-action@v1
         with:
