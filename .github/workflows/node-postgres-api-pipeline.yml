@@ -40,14 +40,19 @@ jobs:
           npx snyk test --all-projects
 
       - name: Set up Java 17
+        id: setup-java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
+      - name: Verify Java version
+        run: java -version
+
       - name: Run SonarCloud scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          JAVA_HOME: ${{ steps.setup-java.outputs.java-home }}
         if: ${{ env.SONAR_TOKEN != '' }}
         uses: sonarsource/sonarcloud-github-action@v1
         with:
@@ -132,14 +137,19 @@ jobs:
           npx snyk test --all-projects
 
       - name: Set up Java 17
+        id: setup-java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
+      - name: Verify Java version
+        run: java -version
+
       - name: Run SonarCloud scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          JAVA_HOME: ${{ steps.setup-java.outputs.java-home }}
         if: ${{ env.SONAR_TOKEN != '' }}
         uses: sonarsource/sonarcloud-github-action@v1
         with:
