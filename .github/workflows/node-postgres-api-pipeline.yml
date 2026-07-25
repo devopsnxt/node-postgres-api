@@ -61,22 +61,19 @@ jobs:
           push: false
           tags: ${{ env.GHCR_IMAGE }}:${{ github.sha }}
 
-      - name: Generate image SBOM
-        uses: anchore/syft-action@v2
-        with:
-          target: docker:${{ env.GHCR_IMAGE }}:${{ github.sha }}
-          output: cyclonedx-json
-          file: image-sbom.json
+      - name: Install syft and trivy
+        run: |
+          set -eux
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
 
-      - name: Scan Docker image
-        uses: aquasecurity/trivy-action@v0.9.4
-        with:
-          scan-type: image
-          image-ref: ${{ env.GHCR_IMAGE }}:${{ github.sha }}
-          format: json
-          output: image-scan.json
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
+      - name: Generate SBOM from source
+        run: |
+          syft dir:. -o cyclonedx-json=./image-sbom.json
+
+      - name: Scan repository filesystem with Trivy
+        run: |
+          trivy fs --format json --output image-scan.json --severity HIGH,CRITICAL --ignore-unfixed .
 
       - name: Upload image scan artifacts
         if: always()
@@ -150,22 +147,19 @@ jobs:
           push: false
           tags: ${{ env.GHCR_IMAGE }}:${{ github.sha }}
 
-      - name: Generate image SBOM
-        uses: anchore/syft-action@v2
-        with:
-          target: docker:${{ env.GHCR_IMAGE }}:${{ github.sha }}
-          output: cyclonedx-json
-          file: image-sbom.json
+      - name: Install syft and trivy
+        run: |
+          set -eux
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
 
-      - name: Scan Docker image
-        uses: aquasecurity/trivy-action@v0.9.4
-        with:
-          scan-type: image
-          image-ref: ${{ env.GHCR_IMAGE }}:${{ github.sha }}
-          format: json
-          output: image-scan.json
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
+      - name: Generate SBOM from source
+        run: |
+          syft dir:. -o cyclonedx-json=./image-sbom.json
+
+      - name: Scan repository filesystem with Trivy
+        run: |
+          trivy fs --format json --output image-scan.json --severity HIGH,CRITICAL --ignore-unfixed .
 
       - name: Upload image scan artifacts
         if: always()
