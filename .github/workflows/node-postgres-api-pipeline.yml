@@ -37,7 +37,7 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         if: ${{ env.SNYK_TOKEN != '' }}
         run: |
-          npx snyk test --all-projects --project-name=node-postgres-api
+          npx snyk test --all-projects
 
       - name: Run SonarCloud scan
         env:
@@ -123,7 +123,7 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         if: ${{ env.SNYK_TOKEN != '' }}
         run: |
-          npx snyk test --all-projects --project-name=node-postgres-api
+          npx snyk test --all-projects
 
       - name: Run SonarCloud scan
         env:
