@@ -63,7 +63,6 @@ jobs:
             -Dsonar.organization=${{ env.SONAR_ORGANIZATION }}
             -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
             -Dsonar.sources=.
-            -Dsonar.tests=.
             -Dsonar.projectName=node-postgres-api
 
       - name: Build Docker image for PR validation
@@ -162,7 +161,6 @@ jobs:
             -Dsonar.organization=${{ env.SONAR_ORGANIZATION }}
             -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
             -Dsonar.sources=.
-            -Dsonar.tests=.
             -Dsonar.projectName=node-postgres-api
 
       - name: Build Docker image for release
