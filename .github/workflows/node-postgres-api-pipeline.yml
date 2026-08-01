@@ -30,13 +30,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Gitleaks
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/install.sh | sh -s -- -b /usr/local/bin
-
       - name: Scan repository for secrets
-        run: |
-          gitleaks detect --source . --redact --no-banner --report-format sarif --report-path gitleaks.sarif
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Gitleaks report
         if: always()
@@ -107,8 +104,12 @@ jobs:
           test -f "$report_file"
           ce_task_url=$(sed -n 's/^ceTaskUrl=//p' "$report_file")
           test -n "$ce_task_url"
+          case "$ce_task_url" in
+            https://*) ;;
+            *) echo "Refusing non-HTTPS SonarCloud task URL"; exit 1 ;;
+          esac
           for attempt in {1..30}; do
-            ce_task=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" "$ce_task_url")
+            ce_task=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" "$ce_task_url")
             ce_status=$(jq -r '.task.status' <<< "$ce_task")
             case "$ce_status" in
               SUCCESS) break ;;
@@ -134,11 +135,11 @@ jobs:
             sonar_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
             measure_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
           fi
-          measures=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" \
+          measures=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" \
             --get "$sonar_url/api/measures/component" \
             "${measure_scope[@]}" \
             --data-urlencode "metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc")
-          quality_gate=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" \
+          quality_gate=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" \
             --get "$sonar_url/api/qualitygates/project_status" \
             "${sonar_scope[@]}")
           metric() {
@@ -179,19 +180,22 @@ jobs:
           push: false
           tags: ${{ env.GHCR_IMAGE }}:${{ github.sha }}
 
-      - name: Install syft and trivy
-        run: |
-          set -eux
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
-          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-
       - name: Generate SBOM from source
-        run: |
-          syft dir:. -o cyclonedx-json=./image-sbom.json
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: image-sbom.json
 
       - name: Scan repository filesystem with Trivy
-        run: |
-          trivy fs --format json --output image-scan.json --severity HIGH,CRITICAL --ignore-unfixed .
+        uses: aquasecurity/trivy-action@0.31.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: json
+          output: image-scan.json
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
 
       - name: Upload image scan artifacts
         if: always()
@@ -246,8 +250,12 @@ jobs:
           test_results=$(head -c 4000 test-output.log 2>/dev/null || echo 'unavailable')
           request=$(jq -n --arg model "$AI_MODEL" --arg diff "$diff_text" --arg scans "$scan_summary" --arg components "$sbom_components" --arg tests "$test_results" '{model: $model, temperature: 0.1, messages: [{role: "system", content: "You are a CI/CD assistant. Produce a concise advisory report in Markdown. Use only the supplied evidence. Do not invent findings, file names, or line numbers. Never include secrets."}, {role: "user", content: ("Summarize this pipeline run. Include: what changed, likely risks, missing tests, and recommended next action. Mark unavailable data clearly.\n\nSecurity counts: " + $scans + "\nSBOM components: " + $components + "\n\nTest output:\n" + $tests + "\n\nDiff:\n" + $diff)}]}')
           response_file=$(mktemp)
+          case "$AI_API_URL" in
+            https://*) ;;
+            *) echo "Refusing non-HTTPS AI provider URL"; exit 1 ;;
+          esac
           set +e
-          http_status=$(curl --silent --show-error --max-time 60 \
+          http_status=$(curl --proto '=https' --tlsv1.2 --silent --show-error --max-time 60 \
             --output "$response_file" --write-out '%{http_code}' \
             --header "Authorization: Bearer $AI_API_KEY" \
             --header 'Content-Type: application/json' \
@@ -321,13 +329,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Gitleaks
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/install.sh | sh -s -- -b /usr/local/bin
-
       - name: Scan repository for secrets
-        run: |
-          gitleaks detect --source . --redact --no-banner --report-format sarif --report-path gitleaks.sarif
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Gitleaks report
         if: always()
@@ -398,8 +403,12 @@ jobs:
           test -f "$report_file"
           ce_task_url=$(sed -n 's/^ceTaskUrl=//p' "$report_file")
           test -n "$ce_task_url"
+          case "$ce_task_url" in
+            https://*) ;;
+            *) echo "Refusing non-HTTPS SonarCloud task URL"; exit 1 ;;
+          esac
           for attempt in {1..30}; do
-            ce_task=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" "$ce_task_url")
+            ce_task=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" "$ce_task_url")
             ce_status=$(jq -r '.task.status' <<< "$ce_task")
             case "$ce_status" in
               SUCCESS) break ;;
@@ -425,11 +434,11 @@ jobs:
             sonar_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
             measure_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
           fi
-          measures=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" \
+          measures=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" \
             --get "$sonar_url/api/measures/component" \
             "${measure_scope[@]}" \
             --data-urlencode "metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc")
-          quality_gate=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" \
+          quality_gate=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" \
             --get "$sonar_url/api/qualitygates/project_status" \
             "${sonar_scope[@]}")
           metric() {
@@ -470,19 +479,22 @@ jobs:
           push: false
           tags: ${{ env.GHCR_IMAGE }}:${{ github.sha }}
 
-      - name: Install syft and trivy
-        run: |
-          set -eux
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
-          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-
       - name: Generate SBOM from source
-        run: |
-          syft dir:. -o cyclonedx-json=./image-sbom.json
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: image-sbom.json
 
       - name: Scan repository filesystem with Trivy
-        run: |
-          trivy fs --format json --output image-scan.json --severity HIGH,CRITICAL --ignore-unfixed .
+        uses: aquasecurity/trivy-action@0.31.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: json
+          output: image-scan.json
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
 
       - name: Upload image scan artifacts
         if: always()
@@ -569,8 +581,12 @@ jobs:
           test_results=$(head -c 4000 test-output.log 2>/dev/null || echo 'unavailable')
           request=$(jq -n --arg model "$AI_MODEL" --arg diff "$diff_text" --arg scans "$scan_summary" --arg components "$sbom_components" --arg digest "$image_digest" --arg tests "$test_results" '{model: $model, temperature: 0.1, messages: [{role: "system", content: "You are a CI/CD assistant. Produce a concise advisory release report in Markdown. Use only the supplied evidence. Do not invent findings. Never include secrets."}, {role: "user", content: ("Summarize release readiness. Include what changed, security risk, rollback concerns, and recommended next action. Mark unavailable data clearly.\n\nSecurity counts: " + $scans + "\nSBOM components: " + $components + "\nImage digest: " + $digest + "\nSignature and SBOM attestation: verified\n\nTest output:\n" + $tests + "\n\nDiff:\n" + $diff)}]}')
           response_file=$(mktemp)
+          case "$AI_API_URL" in
+            https://*) ;;
+            *) echo "Refusing non-HTTPS AI provider URL"; exit 1 ;;
+          esac
           set +e
-          http_status=$(curl --silent --show-error --max-time 60 --output "$response_file" --write-out '%{http_code}' --header "Authorization: Bearer $AI_API_KEY" --header 'Content-Type: application/json' --data "$request" "$AI_API_URL")
+          http_status=$(curl --proto '=https' --tlsv1.2 --silent --show-error --max-time 60 --output "$response_file" --write-out '%{http_code}' --header "Authorization: Bearer $AI_API_KEY" --header 'Content-Type: application/json' --data "$request" "$AI_API_URL")
           curl_exit=$?
           set -e
           if [ "$curl_exit" -ne 0 ]; then http_status='000'; fi
