@@ -78,6 +78,28 @@ jobs:
         run: |
           set -euo pipefail
           sonar_url="https://sonarcloud.io"
+          report_file=".scannerwork/report-task.txt"
+          test -f "$report_file"
+          ce_task_url=$(sed -n 's/^ceTaskUrl=//p' "$report_file")
+          test -n "$ce_task_url"
+          for attempt in {1..30}; do
+            ce_task=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" "$ce_task_url")
+            ce_status=$(jq -r '.task.status' <<< "$ce_task")
+            case "$ce_status" in
+              SUCCESS) break ;;
+              FAILED|CANCELED)
+                echo "SonarCloud analysis task failed: $ce_status"
+                exit 1
+                ;;
+              *)
+                if [ "$attempt" -eq 30 ]; then
+                  echo "Timed out waiting for SonarCloud analysis task: $ce_status"
+                  exit 1
+                fi
+                sleep 5
+                ;;
+            esac
+          done
           sonar_scope=(--data-urlencode "projectKey=$SONAR_PROJECT_KEY")
           measure_scope=(--data-urlencode "component=$SONAR_PROJECT_KEY")
           if [ -n "$SONAR_PULL_REQUEST" ]; then
@@ -153,12 +175,17 @@ jobs:
             image-scan.json
 
       - name: Generate pipeline summary
+        id: pipeline-summary
         if: always()
         run: |
           critical=$(jq '[.Results[]?.Vulnerabilities[]? | select(.severity == "CRITICAL")] | length' image-scan.json 2>/dev/null || echo "n/a")
           high=$(jq '[.Results[]?.Vulnerabilities[]? | select(.severity == "HIGH")] | length' image-scan.json 2>/dev/null || echo "n/a")
           unfixed=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Status != "fixed")] | length' image-scan.json 2>/dev/null || echo "n/a")
           components=$(jq '.components | length' image-sbom.json 2>/dev/null || echo "n/a")
+          echo "critical=$critical" >> "$GITHUB_OUTPUT"
+          echo "high=$high" >> "$GITHUB_OUTPUT"
+          echo "unfixed=$unfixed" >> "$GITHUB_OUTPUT"
+          echo "components=$components" >> "$GITHUB_OUTPUT"
           {
             echo "## Pipeline summary"
             echo ""
@@ -187,6 +214,17 @@ jobs:
             - Build image: `${{ env.GHCR_IMAGE }}:${{ github.sha }}`
             - Tests: completed
             - Pipeline: pull request validation
+
+            **Trivy filesystem scan**
+
+            | Severity | Findings |
+            |---|---:|
+            | Critical | ${{ steps.pipeline-summary.outputs.critical }} |
+            | High | ${{ steps.pipeline-summary.outputs.high }} |
+            | Unfixed | ${{ steps.pipeline-summary.outputs.unfixed }} |
+
+            SBOM components: ${{ steps.pipeline-summary.outputs.components }}
+            Detailed results: download the `image-scan-artifacts` artifact from this workflow run.
 
   fast-forward-merge:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -254,6 +292,28 @@ jobs:
         run: |
           set -euo pipefail
           sonar_url="https://sonarcloud.io"
+          report_file=".scannerwork/report-task.txt"
+          test -f "$report_file"
+          ce_task_url=$(sed -n 's/^ceTaskUrl=//p' "$report_file")
+          test -n "$ce_task_url"
+          for attempt in {1..30}; do
+            ce_task=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" "$ce_task_url")
+            ce_status=$(jq -r '.task.status' <<< "$ce_task")
+            case "$ce_status" in
+              SUCCESS) break ;;
+              FAILED|CANCELED)
+                echo "SonarCloud analysis task failed: $ce_status"
+                exit 1
+                ;;
+              *)
+                if [ "$attempt" -eq 30 ]; then
+                  echo "Timed out waiting for SonarCloud analysis task: $ce_status"
+                  exit 1
+                fi
+                sleep 5
+                ;;
+            esac
+          done
           sonar_scope=(--data-urlencode "projectKey=$SONAR_PROJECT_KEY")
           measure_scope=(--data-urlencode "component=$SONAR_PROJECT_KEY")
           if [ -n "$SONAR_PULL_REQUEST" ]; then
