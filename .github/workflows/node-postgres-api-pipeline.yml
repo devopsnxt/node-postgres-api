@@ -75,7 +75,7 @@ jobs:
         run: java -version
 
       - name: Validate SonarCloud configuration
-        if: ${{ secrets.SONAR_TOKEN != '' }}
+        if: ${{ env.SONAR_TOKEN != '' }}
         env:
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -99,7 +99,7 @@ jobs:
           SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
           SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
           SONAR_SCANNER_JRE: ${{ steps.setup-java.outputs.java-home }}
-        if: ${{ secrets.SONAR_TOKEN != '' }}
+        if: ${{ env.SONAR_TOKEN != '' }}
         uses: SonarSource/sonarqube-scan-action@0303d6b62e310685c0e34d0b9cde218036885c4d # v5.0.0
         with:
           projectBaseDir: .
@@ -351,7 +351,7 @@ jobs:
         run: java -version
 
       - name: Validate SonarCloud configuration
-        if: ${{ secrets.SONAR_TOKEN != '' }}
+        if: ${{ env.SONAR_TOKEN != '' }}
         env:
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -375,7 +375,7 @@ jobs:
           SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
           SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
           SONAR_SCANNER_JRE: ${{ steps.setup-java.outputs.java-home }}
-        if: ${{ secrets.SONAR_TOKEN != '' }}
+        if: ${{ env.SONAR_TOKEN != '' }}
         uses: SonarSource/sonarqube-scan-action@0303d6b62e310685c0e34d0b9cde218036885c4d # v5.0.0
         with:
           projectBaseDir: .
