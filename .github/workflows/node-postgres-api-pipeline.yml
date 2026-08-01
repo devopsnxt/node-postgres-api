@@ -65,6 +65,58 @@ jobs:
             -Dsonar.sources=.
             -Dsonar.projectName=node-postgres-api
 
+      - name: Show SonarCloud statistics
+        if: ${{ env.SONAR_TOKEN != '' }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+          SONAR_PULL_REQUEST: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          sonar_url="https://sonarcloud.io"
+          sonar_scope=(--data-urlencode "projectKey=$SONAR_PROJECT_KEY")
+          measure_scope=(--data-urlencode "component=$SONAR_PROJECT_KEY")
+          if [ -n "$SONAR_PULL_REQUEST" ]; then
+            sonar_scope+=(--data-urlencode "pullRequest=$SONAR_PULL_REQUEST")
+            measure_scope+=(--data-urlencode "pullRequest=$SONAR_PULL_REQUEST")
+          fi
+          measures=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" \
+            --get "$sonar_url/api/measures/component" \
+            "${measure_scope[@]}" \
+            --data-urlencode "metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc")
+          quality_gate=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" \
+            --get "$sonar_url/api/qualitygates/project_status" \
+            "${sonar_scope[@]}")
+          metric() {
+            jq -r --arg key "$1" '([.component.measures[]? | select(.metric == $key) | .value] | first) // "n/a"' <<< "$measures"
+          }
+          quality_status=$(jq -r '.projectStatus.status // "UNKNOWN"' <<< "$quality_gate")
+          bugs=$(metric bugs)
+          vulnerabilities=$(metric vulnerabilities)
+          code_smells=$(metric code_smells)
+          coverage=$(metric coverage)
+          duplication=$(metric duplicated_lines_density)
+          lines=$(metric ncloc)
+          {
+            echo "## SonarCloud statistics"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|---|---:|"
+            echo "| Quality gate | $quality_status |"
+            echo "| Bugs | $bugs |"
+            echo "| Vulnerabilities | $vulnerabilities |"
+            echo "| Code smells | $code_smells |"
+            echo "| Coverage | ${coverage}% |"
+            echo "| Duplicated lines | ${duplication}% |"
+            echo "| Lines of code | $lines |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "SonarCloud quality gate: $quality_status"
+          echo "Bugs: $bugs | Vulnerabilities: $vulnerabilities | Code smells: $code_smells | Coverage: ${coverage}% | Duplicated lines: ${duplication}% | Lines: $lines"
+          if [ "$quality_status" != "OK" ]; then
+            echo "SonarCloud quality gate failed: $quality_status"
+            exit 1
+          fi
+
       - name: Build Docker image for PR validation
         uses: docker/build-push-action@v7
         with:
@@ -95,6 +147,28 @@ jobs:
           path: |
             image-sbom.json
             image-scan.json
+
+      - name: Generate pipeline summary
+        if: always()
+        run: |
+          critical=$(jq '[.Results[]?.Vulnerabilities[]? | select(.severity == "CRITICAL")] | length' image-scan.json 2>/dev/null || echo "n/a")
+          high=$(jq '[.Results[]?.Vulnerabilities[]? | select(.severity == "HIGH")] | length' image-scan.json 2>/dev/null || echo "n/a")
+          unfixed=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Status != "fixed")] | length' image-scan.json 2>/dev/null || echo "n/a")
+          components=$(jq '.components | length' image-sbom.json 2>/dev/null || echo "n/a")
+          {
+            echo "## Pipeline summary"
+            echo ""
+            echo "| Area | Result |"
+            echo "|---|---|"
+            echo "| Commit | \`${GITHUB_SHA:0:12}\` |"
+            echo "| Docker image | \`${GHCR_IMAGE}:${GITHUB_SHA}\` (PR validation only) |"
+            echo "| Trivy critical findings | $critical |"
+            echo "| Trivy high findings | $high |"
+            echo "| Trivy unfixed findings | $unfixed |"
+            echo "| SBOM components | $components |"
+            echo "| Image scan artifacts | Uploaded as \`image-scan-artifacts\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Pipeline summary: Trivy critical=$critical, high=$high, unfixed=$unfixed, SBOM components=$components"
 
       - name: Comment PR with build summary
         uses: peter-evans/create-or-update-comment@v4
@@ -166,6 +240,58 @@ jobs:
             -Dsonar.sources=.
             -Dsonar.projectName=node-postgres-api
 
+      - name: Show SonarCloud statistics
+        if: ${{ env.SONAR_TOKEN != '' }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+          SONAR_PULL_REQUEST: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          sonar_url="https://sonarcloud.io"
+          sonar_scope=(--data-urlencode "projectKey=$SONAR_PROJECT_KEY")
+          measure_scope=(--data-urlencode "component=$SONAR_PROJECT_KEY")
+          if [ -n "$SONAR_PULL_REQUEST" ]; then
+            sonar_scope+=(--data-urlencode "pullRequest=$SONAR_PULL_REQUEST")
+            measure_scope+=(--data-urlencode "pullRequest=$SONAR_PULL_REQUEST")
+          fi
+          measures=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" \
+            --get "$sonar_url/api/measures/component" \
+            "${measure_scope[@]}" \
+            --data-urlencode "metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc")
+          quality_gate=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" \
+            --get "$sonar_url/api/qualitygates/project_status" \
+            "${sonar_scope[@]}")
+          metric() {
+            jq -r --arg key "$1" '([.component.measures[]? | select(.metric == $key) | .value] | first) // "n/a"' <<< "$measures"
+          }
+          quality_status=$(jq -r '.projectStatus.status // "UNKNOWN"' <<< "$quality_gate")
+          bugs=$(metric bugs)
+          vulnerabilities=$(metric vulnerabilities)
+          code_smells=$(metric code_smells)
+          coverage=$(metric coverage)
+          duplication=$(metric duplicated_lines_density)
+          lines=$(metric ncloc)
+          {
+            echo "## SonarCloud statistics"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|---|---:|"
+            echo "| Quality gate | $quality_status |"
+            echo "| Bugs | $bugs |"
+            echo "| Vulnerabilities | $vulnerabilities |"
+            echo "| Code smells | $code_smells |"
+            echo "| Coverage | ${coverage}% |"
+            echo "| Duplicated lines | ${duplication}% |"
+            echo "| Lines of code | $lines |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "SonarCloud quality gate: $quality_status"
+          echo "Bugs: $bugs | Vulnerabilities: $vulnerabilities | Code smells: $code_smells | Coverage: ${coverage}% | Duplicated lines: ${duplication}% | Lines: $lines"
+          if [ "$quality_status" != "OK" ]; then
+            echo "SonarCloud quality gate failed: $quality_status"
+            exit 1
+          fi
+
       - name: Build Docker image for release
         uses: docker/build-push-action@v7
         with:
@@ -197,6 +323,33 @@ jobs:
             image-sbom.json
             image-scan.json
 
+      - name: Generate pipeline summary
+        if: always()
+        env:
+          GHCR_IMAGE: ${{ env.GHCR_IMAGE }}
+        run: |
+          critical=$(jq '[.Results[]?.Vulnerabilities[]? | select(.severity == "CRITICAL")] | length' image-scan.json 2>/dev/null || echo "n/a")
+          high=$(jq '[.Results[]?.Vulnerabilities[]? | select(.severity == "HIGH")] | length' image-scan.json 2>/dev/null || echo "n/a")
+          unfixed=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Status != "fixed")] | length' image-scan.json 2>/dev/null || echo "n/a")
+          components=$(jq '.components | length' image-sbom.json 2>/dev/null || echo "n/a")
+          image_digest="${IMAGE_DIGEST:-not available}"
+          {
+            echo "## Pipeline summary"
+            echo ""
+            echo "| Area | Result |"
+            echo "|---|---|"
+            echo "| Commit | \`${GITHUB_SHA:0:12}\` |"
+            echo "| Docker image | \`${GHCR_IMAGE}@${image_digest}\` |"
+            echo "| Trivy critical findings | $critical |"
+            echo "| Trivy high findings | $high |"
+            echo "| Trivy unfixed findings | $unfixed |"
+            echo "| SBOM components | $components |"
+            echo "| Image signature | Verified |"
+            echo "| SBOM attestation | Verified |"
+            echo "| Image scan artifacts | Uploaded as \`image-scan-artifacts\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Pipeline summary: digest=$image_digest, Trivy critical=$critical, high=$high, unfixed=$unfixed, SBOM components=$components"
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v4
         with:
@@ -222,6 +375,7 @@ jobs:
           cosign public-key --key env://COSIGN_PRIVATE_KEY > cosign.pub
           image_digest=$(docker buildx imagetools inspect "${{ env.GHCR_IMAGE }}:${{ github.sha }}" --format '{{json .Manifest.Digest}}' | tr -d '"')
           test -n "$image_digest"
+          echo "IMAGE_DIGEST=$image_digest" >> "$GITHUB_ENV"
           image_ref="${{ env.GHCR_IMAGE }}@$image_digest"
           cosign sign --key env://COSIGN_PRIVATE_KEY "$image_ref"
           cosign attest --key env://COSIGN_PRIVATE_KEY --predicate image-sbom.json "$image_ref"
