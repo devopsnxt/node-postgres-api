@@ -243,12 +243,23 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           set -euo pipefail
-          diff_text=$(git diff --no-ext-diff "$BASE_SHA...$GITHUB_SHA" -- . ':!package-lock.json' ':!*.lock' | head -c 12000 || true)
-          diff_text=$(printf '%s' "$diff_text" | sed -E 's/(password|token|secret|api[_-]?key|private[_-]?key)[^[:space:]=]*[[:space:]]*=[[:space:]]*[^[:space:]]+/\1=<REDACTED>/Ig')
+          changed_files=$(git diff --name-only "$BASE_SHA...$GITHUB_SHA" -- '*.js' '*.json' '*.yml' '*.yaml' 'Dockerfile' '*.test.*' '*.spec.*' || true)
+          review_context=''
+          while IFS= read -r changed_file; do
+            [ -n "$changed_file" ] || continue
+            case "$changed_file" in
+              package.json|package-lock.json|Dockerfile|.github/workflows/*.yml|.github/workflows/*.yaml|*.js|*.test.*|*.spec.*)
+                file_content=$(git show "$GITHUB_SHA:$changed_file" 2>/dev/null || true)
+                file_content=$(printf '%s' "$file_content" | sed -E 's/(password|token|secret|api[_-]?key|private[_-]?key)[^[:space:]=]*[[:space:]]*=[[:space:]]*[^[:space:]]+/\1=<REDACTED>/Ig')
+                review_context="$review_context\n\n===== $changed_file =====\n$file_content"
+                ;;
+            esac
+          done <<< "$changed_files"
+          review_context=$(printf '%s' "$review_context" | head -c 24000)
           scan_summary=$(jq -c '{critical: ([.Results[]?.Vulnerabilities[]? | select(.severity == "CRITICAL")] | length), high: ([.Results[]?.Vulnerabilities[]? | select(.severity == "HIGH")] | length)}' image-scan.json 2>/dev/null || echo '{}')
           sbom_components=$(jq '.components | length' image-sbom.json 2>/dev/null || echo 'unavailable')
           test_results=$(head -c 4000 test-output.log 2>/dev/null || echo 'unavailable')
-          request=$(jq -n --arg model "$AI_MODEL" --arg diff "$diff_text" --arg scans "$scan_summary" --arg components "$sbom_components" --arg tests "$test_results" '{model: $model, temperature: 0.1, messages: [{role: "system", content: "You are a CI/CD assistant. Produce a concise advisory report in Markdown. Use only the supplied evidence. Do not invent findings, file names, or line numbers. Never include secrets."}, {role: "user", content: ("Summarize this pipeline run. Include: what changed, likely risks, missing tests, and recommended next action. Mark unavailable data clearly.\n\nSecurity counts: " + $scans + "\nSBOM components: " + $components + "\n\nTest output:\n" + $tests + "\n\nDiff:\n" + $diff)}]}')
+          request=$(jq -n --arg model "$AI_MODEL" --arg context "$review_context" --arg scans "$scan_summary" --arg components "$sbom_components" --arg tests "$test_results" '{model: $model, temperature: 0.1, messages: [{role: "system", content: "You are performing a targeted, advisory code review. Return JSON only, with no Markdown fences or extra text. Use only supplied evidence. Do not invent files, line numbers, or findings. Every finding line must be a positive integer present in the supplied changed file. Never include secrets. Use exactly this schema: {summary:string, findings:[{severity:high|medium|low|info,file:string,line:integer,issue:string,recommendation:string}], testRecommendations:[string], releaseRisk:low|medium|high}. Use an empty findings array when there is no evidence."}, {role: "user", content: ("Review only the changed files and directly related reports below. Focus on bugs, auth, injection, secret exposure, unsafe Docker/workflow configuration, validation, tests, API/database risks.\n\nChanged files:\n" + $context + "\n\nTrivy summary: " + $scans + "\nSBOM components: " + $components + "\nTest output:\n" + $tests)}]}')
           response_file=$(mktemp)
           case "$AI_API_URL" in
             https://*) ;;
@@ -267,22 +278,47 @@ jobs:
           rm -f "$response_file"
           if [ "$http_status" = "200" ]; then
             ai_text=$(jq -r '.choices[0].message.content // empty' <<< "$report")
+            if ! printf '%s' "$ai_text" | jq -e 'type == "object" and (.summary | type == "string") and (.findings | type == "array") and all(.findings[]; (.severity | IN("high", "medium", "low", "info")) and (.file | type == "string") and (.line | type == "number" and floor == . and . >= 1) and (.issue | type == "string") and (.recommendation | type == "string")) and (.testRecommendations | type == "array") and all(.testRecommendations[]; type == "string") and (.releaseRisk | IN("low", "medium", "high"))' >/dev/null 2>&1; then
+              ai_text=''
+              echo 'AI review unavailable: provider returned invalid JSON or schema.'
+            fi
+            if [ -n "$ai_text" ]; then
+              while IFS=$'\t' read -r finding_file finding_line; do
+                if [ ! -f "$finding_file" ] || [ "$finding_line" -gt "$(wc -l < "$finding_file")" ]; then
+                  ai_text=''
+                  echo "AI review unavailable: finding reference is invalid: ${finding_file}:${finding_line}"
+                  break
+                fi
+              done < <(jq -r '.findings[] | [.file, .line] | @tsv' <<< "$ai_text")
+            fi
           else
             provider_error=$(jq -r '.error.message // .message // "no provider error message"' <<< "$report" 2>/dev/null || echo 'unparseable provider response')
-            ai_text="AI report unavailable: provider returned HTTP $http_status. $provider_error"
+            ai_text=''
             echo "AI provider request failed: URL=$AI_API_URL MODEL=$AI_MODEL HTTP_STATUS=$http_status"
+            echo "AI review unavailable: provider returned HTTP $http_status. $provider_error"
           fi
           if [ -z "$ai_text" ]; then
-            ai_text='AI report unavailable: the provider returned no report.'
+            ai_text='{"summary":"AI review unavailable.","findings":[],"testRecommendations":[],"releaseRisk":"low"}'
           fi
-          {
-            echo "## AI pipeline report (advisory)"
+          review_summary=$(jq -r '.summary' <<< "$ai_text")
+          review_risk=$(jq -r '.releaseRisk' <<< "$ai_text")
+          review_markdown=$( {
+            echo "## AI targeted review (advisory)"
             echo ""
-            printf '%s\n' "$ai_text"
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "**Summary:** $review_summary"
+            echo ""
+            echo "**Release risk:** $review_risk"
+            echo ""
+            echo "### Findings"
+            jq -r 'if (.findings | length) == 0 then "No evidence-based findings." else .findings[] | "- **\(.severity)** [\(.file):\(.line)] \(.issue) Recommendation: \(.recommendation)" end' <<< "$ai_text"
+            echo ""
+            echo "### Test recommendations"
+            jq -r 'if (.testRecommendations | length) == 0 then "None." else .testRecommendations[] | "- \(.)" end' <<< "$ai_text"
+          } )
+          printf '%s\n' "$review_markdown" >> "$GITHUB_STEP_SUMMARY"
           {
             echo 'report<<AI_REPORT_EOF'
-            printf '%s\n' "$ai_text"
+            printf '%s\n' "$review_markdown"
             echo 'AI_REPORT_EOF'
           } >> "$GITHUB_OUTPUT"
 
