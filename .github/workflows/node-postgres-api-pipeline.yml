@@ -255,7 +255,7 @@ jobs:
                 ;;
             esac
           done <<< "$changed_files"
-          review_context=$(printf '%s' "$review_context" | head -c 24000)
+          review_context="${review_context:0:24000}"
           scan_summary=$(jq -c '{critical: ([.Results[]?.Vulnerabilities[]? | select(.severity == "CRITICAL")] | length), high: ([.Results[]?.Vulnerabilities[]? | select(.severity == "HIGH")] | length)}' image-scan.json 2>/dev/null || echo '{}')
           sbom_components=$(jq '.components | length' image-sbom.json 2>/dev/null || echo 'unavailable')
           test_results=$(head -c 4000 test-output.log 2>/dev/null || echo 'unavailable')
