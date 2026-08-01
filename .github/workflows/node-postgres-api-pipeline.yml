@@ -74,6 +74,21 @@ jobs:
       - name: Verify Java version
         run: java -version
 
+      - name: Validate SonarCloud configuration
+        if: ${{ env.SONAR_TOKEN != '' }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SONAR_TOKEN" || { echo "SONAR_TOKEN is missing"; exit 1; }
+          test -n "$SONAR_ORGANIZATION" || { echo "SONAR_ORGANIZATION repository variable is missing"; exit 1; }
+          test -n "$SONAR_PROJECT_KEY" || { echo "SONAR_PROJECT_KEY repository variable is missing"; exit 1; }
+          echo "SonarCloud organization is configured: ${SONAR_ORGANIZATION:0:3}***"
+          echo "SonarCloud project key is configured: ${SONAR_PROJECT_KEY:0:3}***"
+          echo "SonarCloud token length: ${#SONAR_TOKEN}"
+
       - name: Run SonarCloud scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -328,6 +343,21 @@ jobs:
 
       - name: Verify Java version
         run: java -version
+
+      - name: Validate SonarCloud configuration
+        if: ${{ env.SONAR_TOKEN != '' }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SONAR_TOKEN" || { echo "SONAR_TOKEN is missing"; exit 1; }
+          test -n "$SONAR_ORGANIZATION" || { echo "SONAR_ORGANIZATION repository variable is missing"; exit 1; }
+          test -n "$SONAR_PROJECT_KEY" || { echo "SONAR_PROJECT_KEY repository variable is missing"; exit 1; }
+          echo "SonarCloud organization is configured: ${SONAR_ORGANIZATION:0:3}***"
+          echo "SonarCloud project key is configured: ${SONAR_PROJECT_KEY:0:3}***"
+          echo "SonarCloud token length: ${#SONAR_TOKEN}"
 
       - name: Run SonarCloud scan
         env:
