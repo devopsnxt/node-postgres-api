@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
@@ -41,7 +41,7 @@ jobs:
 
       - name: Set up Java 17
         id: setup-java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -66,7 +66,7 @@ jobs:
             -Dsonar.projectName=node-postgres-api
 
       - name: Build Docker image for PR validation
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
@@ -89,7 +89,7 @@ jobs:
 
       - name: Upload image scan artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: image-scan-artifacts
           path: |
@@ -117,7 +117,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
@@ -142,7 +142,7 @@ jobs:
 
       - name: Set up Java 17
         id: setup-java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -167,7 +167,7 @@ jobs:
             -Dsonar.projectName=node-postgres-api
 
       - name: Build Docker image for release
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
@@ -190,7 +190,7 @@ jobs:
 
       - name: Upload image scan artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: image-scan-artifacts
           path: |
@@ -211,7 +211,7 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
         with:
-          version: '2.4.1'
+          cosign-release: 'v2.4.1'
 
       - name: Sign GHCR image and attach SBOM
         env:
