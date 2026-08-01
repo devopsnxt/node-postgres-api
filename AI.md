@@ -234,11 +234,11 @@ AI_API_KEY
 Optional repository variables:
 
 ```text
-AI_API_URL=https://api.openai.com/v1/chat/completions
-AI_MODEL=gpt-4o-mini
+AI_API_URL=https://api.groq.com/openai/v1/chat/completions
+AI_MODEL=llama-3.3-70b-versatile
 ```
 
-The workflow uses an OpenAI-compatible chat-completions endpoint. A compatible provider can be selected by changing `AI_API_URL` and `AI_MODEL`; the API key remains stored in GitHub Actions Secrets.
+The workflow uses Groq's OpenAI-compatible chat-completions endpoint. A compatible Groq model can be selected by changing `AI_MODEL`; the API key remains stored in the `AI_API_KEY` GitHub Actions Secret.
 
 When `AI_API_KEY` is not configured, the AI steps are skipped and the deterministic pipeline continues normally. When the provider is unavailable, the workflow writes an "AI report unavailable" message and continues; AI is advisory in Phase 1.
 
