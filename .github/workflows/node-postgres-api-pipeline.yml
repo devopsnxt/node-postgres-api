@@ -20,6 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       AI_ENABLED: ${{ secrets.AI_API_KEY != '' }}
+      SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN || '' }}
+      SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION || '' }}
+      SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY || '' }}
     permissions:
       contents: read
       issues: write
@@ -297,6 +301,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       AI_ENABLED: ${{ secrets.AI_API_KEY != '' }}
+      SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN || '' }}
+      SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION || '' }}
+      SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY || '' }}
     permissions:
       contents: write
       packages: write
