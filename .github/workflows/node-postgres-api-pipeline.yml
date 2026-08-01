@@ -209,9 +209,9 @@ jobs:
           docker push ${{ env.GHCR_IMAGE }}:${{ github.sha }}
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v2
+        uses: sigstore/cosign-installer@v3
         with:
-          version: '2.2.0'
+          version: '2.4.1'
 
       - name: Sign GHCR image and attach SBOM
         env:
