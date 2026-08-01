@@ -94,6 +94,10 @@ jobs:
       - name: Run SonarCloud scan
         env:
           SONAR_SCANNER_JRE: ${{ steps.setup-java.outputs.java-home }}
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+          SONAR_ORGANIZATION: ${{ env.SONAR_ORGANIZATION }}
+          SONAR_PROJECT_KEY: ${{ env.SONAR_PROJECT_KEY }}
         if: ${{ env.SONAR_TOKEN != '' }}
         uses: SonarSource/sonarqube-scan-action@0303d6b62e310685c0e34d0b9cde218036885c4d # v5.0.0
         with:
@@ -380,6 +384,10 @@ jobs:
       - name: Run SonarCloud scan
         env:
           SONAR_SCANNER_JRE: ${{ steps.setup-java.outputs.java-home }}
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+          SONAR_ORGANIZATION: ${{ env.SONAR_ORGANIZATION }}
+          SONAR_PROJECT_KEY: ${{ env.SONAR_PROJECT_KEY }}
         if: ${{ env.SONAR_TOKEN != '' }}
         uses: SonarSource/sonarqube-scan-action@0303d6b62e310685c0e34d0b9cde218036885c4d # v5.0.0
         with:
