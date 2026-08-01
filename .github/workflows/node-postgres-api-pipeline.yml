@@ -18,16 +18,33 @@ jobs:
   pull-request:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    env:
+      AI_ENABLED: ${{ secrets.AI_API_KEY != '' }}
     permissions:
       contents: read
       issues: write
       pull-requests: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Scan repository for secrets
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Gitleaks report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: gitleaks-report
+          path: gitleaks.sarif
+          if-no-files-found: ignore
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
 
@@ -38,7 +55,7 @@ jobs:
         run: npm run lint --if-present
 
       - name: Run tests (if present)
-        run: npm test --if-present
+        run: set -o pipefail; npm test --if-present 2>&1 | tee test-output.log
 
       - name: Run Snyk scan
         env:
@@ -49,7 +66,7 @@ jobs:
 
       - name: Set up Java 17
         id: setup-java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '17'
@@ -64,7 +81,7 @@ jobs:
           SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
           SONAR_SCANNER_JRE: ${{ steps.setup-java.outputs.java-home }}
         if: ${{ env.SONAR_TOKEN != '' }}
-        uses: SonarSource/sonarqube-scan-action@v5.0.0
+        uses: SonarSource/sonarqube-scan-action@0303d6b62e310685c0e34d0b9cde218036885c4d # v5.0.0
         with:
           projectBaseDir: .
           args: >
@@ -87,8 +104,12 @@ jobs:
           test -f "$report_file"
           ce_task_url=$(sed -n 's/^ceTaskUrl=//p' "$report_file")
           test -n "$ce_task_url"
+          case "$ce_task_url" in
+            https://*) ;;
+            *) echo "Refusing non-HTTPS SonarCloud task URL"; exit 1 ;;
+          esac
           for attempt in {1..30}; do
-            ce_task=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" "$ce_task_url")
+            ce_task=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" "$ce_task_url")
             ce_status=$(jq -r '.task.status' <<< "$ce_task")
             case "$ce_status" in
               SUCCESS) break ;;
@@ -114,11 +135,11 @@ jobs:
             sonar_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
             measure_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
           fi
-          measures=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" \
+          measures=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" \
             --get "$sonar_url/api/measures/component" \
             "${measure_scope[@]}" \
             --data-urlencode "metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc")
-          quality_gate=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" \
+          quality_gate=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" \
             --get "$sonar_url/api/qualitygates/project_status" \
             "${sonar_scope[@]}")
           metric() {
@@ -152,30 +173,33 @@ jobs:
           fi
 
       - name: Build Docker image for PR validation
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           file: ./Dockerfile
           push: false
           tags: ${{ env.GHCR_IMAGE }}:${{ github.sha }}
 
-      - name: Install syft and trivy
-        run: |
-          set -eux
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
-          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-
       - name: Generate SBOM from source
-        run: |
-          syft dir:. -o cyclonedx-json=./image-sbom.json
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: image-sbom.json
 
       - name: Scan repository filesystem with Trivy
-        run: |
-          trivy fs --format json --output image-scan.json --severity HIGH,CRITICAL --ignore-unfixed .
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: json
+          output: image-scan.json
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
 
       - name: Upload image scan artifacts
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: image-scan-artifacts
           path: |
@@ -209,8 +233,97 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "Pipeline summary: Trivy critical=$critical, high=$high, unfixed=$unfixed, SBOM components=$components"
 
+      - name: Generate AI pipeline report
+        id: ai-report
+        if: ${{ env.AI_ENABLED == 'true' }}
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_API_URL: ${{ vars.AI_API_URL || 'https://api.groq.com/openai/v1/chat/completions' }}
+          AI_MODEL: ${{ vars.AI_MODEL || 'llama-3.3-70b-versatile' }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          changed_files=$(git diff --name-only "$BASE_SHA...$GITHUB_SHA" -- '*.js' '*.json' '*.yml' '*.yaml' 'Dockerfile' '*.test.*' '*.spec.*' || true)
+          review_context=''
+          while IFS= read -r changed_file; do
+            [ -n "$changed_file" ] || continue
+            case "$changed_file" in
+              package.json|package-lock.json|Dockerfile|.github/workflows/*.yml|.github/workflows/*.yaml|*.js|*.test.*|*.spec.*)
+                file_content=$(git show "$GITHUB_SHA:$changed_file" 2>/dev/null || true)
+                file_content=$(printf '%s' "$file_content" | sed -E 's/(password|token|secret|api[_-]?key|private[_-]?key)[^[:space:]=]*[[:space:]]*=[[:space:]]*[^[:space:]]+/\1=<REDACTED>/Ig')
+                review_context="$review_context\n\n===== $changed_file =====\n$file_content"
+                ;;
+            esac
+          done <<< "$changed_files"
+          review_context="${review_context:0:24000}"
+          scan_summary=$(jq -c '{critical: ([.Results[]?.Vulnerabilities[]? | select(.severity == "CRITICAL")] | length), high: ([.Results[]?.Vulnerabilities[]? | select(.severity == "HIGH")] | length)}' image-scan.json 2>/dev/null || echo '{}')
+          sbom_components=$(jq '.components | length' image-sbom.json 2>/dev/null || echo 'unavailable')
+          test_results=$(head -c 4000 test-output.log 2>/dev/null || echo 'unavailable')
+          request=$(jq -n --arg model "$AI_MODEL" --arg context "$review_context" --arg scans "$scan_summary" --arg components "$sbom_components" --arg tests "$test_results" '{model: $model, temperature: 0.1, messages: [{role: "system", content: "You are performing a targeted, advisory code review. Return JSON only, with no Markdown fences or extra text. Use only supplied evidence. Do not invent files, line numbers, or findings. Every finding line must be a positive integer present in the supplied changed file. Never include secrets. Use exactly this schema: {summary:string, findings:[{severity:high|medium|low|info,file:string,line:integer,issue:string,recommendation:string}], testRecommendations:[string], releaseRisk:low|medium|high}. Use an empty findings array when there is no evidence."}, {role: "user", content: ("Review only the changed files and directly related reports below. Focus on bugs, auth, injection, secret exposure, unsafe Docker/workflow configuration, validation, tests, API/database risks.\n\nChanged files:\n" + $context + "\n\nTrivy summary: " + $scans + "\nSBOM components: " + $components + "\nTest output:\n" + $tests)}]}')
+          response_file=$(mktemp)
+          case "$AI_API_URL" in
+            https://*) ;;
+            *) echo "Refusing non-HTTPS AI provider URL"; exit 1 ;;
+          esac
+          set +e
+          http_status=$(curl --proto '=https' --tlsv1.2 --silent --show-error --max-time 60 \
+            --output "$response_file" --write-out '%{http_code}' \
+            --header "Authorization: Bearer $AI_API_KEY" \
+            --header 'Content-Type: application/json' \
+            --data "$request" "$AI_API_URL")
+          curl_exit=$?
+          set -e
+          if [ "$curl_exit" -ne 0 ]; then http_status='000'; fi
+          report=$(cat "$response_file")
+          rm -f "$response_file"
+          if [ "$http_status" = "200" ]; then
+            ai_text=$(jq -r '.choices[0].message.content // empty' <<< "$report")
+            if ! printf '%s' "$ai_text" | jq -e 'type == "object" and (.summary | type == "string") and (.findings | type == "array") and all(.findings[]; (.severity | IN("high", "medium", "low", "info")) and (.file | type == "string") and (.line | type == "number" and floor == . and . >= 1) and (.issue | type == "string") and (.recommendation | type == "string")) and (.testRecommendations | type == "array") and all(.testRecommendations[]; type == "string") and (.releaseRisk | IN("low", "medium", "high"))' >/dev/null 2>&1; then
+              ai_text=''
+              echo 'AI review unavailable: provider returned invalid JSON or schema.'
+            fi
+            if [ -n "$ai_text" ]; then
+              while IFS=$'\t' read -r finding_file finding_line; do
+                if [ ! -f "$finding_file" ] || [ "$finding_line" -gt "$(wc -l < "$finding_file")" ]; then
+                  ai_text=''
+                  echo "AI review unavailable: finding reference is invalid: ${finding_file}:${finding_line}"
+                  break
+                fi
+              done < <(jq -r '.findings[] | [.file, .line] | @tsv' <<< "$ai_text")
+            fi
+          else
+            provider_error=$(jq -r '.error.message // .message // "no provider error message"' <<< "$report" 2>/dev/null || echo 'unparseable provider response')
+            ai_text=''
+            echo "AI provider request failed: URL=$AI_API_URL MODEL=$AI_MODEL HTTP_STATUS=$http_status"
+            echo "AI review unavailable: provider returned HTTP $http_status. $provider_error"
+          fi
+          if [ -z "$ai_text" ]; then
+            ai_text='{"summary":"AI review unavailable.","findings":[],"testRecommendations":[],"releaseRisk":"low"}'
+          fi
+          review_summary=$(jq -r '.summary' <<< "$ai_text")
+          review_risk=$(jq -r '.releaseRisk' <<< "$ai_text")
+          review_markdown=$( {
+            echo "## AI targeted review (advisory)"
+            echo ""
+            echo "**Summary:** $review_summary"
+            echo ""
+            echo "**Release risk:** $review_risk"
+            echo ""
+            echo "### Findings"
+            jq -r 'if (.findings | length) == 0 then "No evidence-based findings." else .findings[] | "- **\(.severity)** [\(.file):\(.line)] \(.issue) Recommendation: \(.recommendation)" end' <<< "$ai_text"
+            echo ""
+            echo "### Test recommendations"
+            jq -r 'if (.testRecommendations | length) == 0 then "None." else .testRecommendations[] | "- \(.)" end' <<< "$ai_text"
+          } )
+          printf '%s\n' "$review_markdown" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo 'report<<AI_REPORT_EOF'
+            printf '%s\n' "$review_markdown"
+            echo 'AI_REPORT_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Comment PR with build summary
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@71345be0265236311c031f5c7866368bd1eff043 # v4
         if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -234,18 +347,39 @@ jobs:
             SBOM components: ${{ steps.pipeline-summary.outputs.components }}
             Detailed results: download the `image-scan-artifacts` artifact from this workflow run.
 
+            **AI pipeline report (advisory)**
+
+            ${{ steps.ai-report.outputs.report }}
+
   fast-forward-merge:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    env:
+      AI_ENABLED: ${{ secrets.AI_API_KEY != '' }}
     permissions:
       contents: write
       packages: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Scan repository for secrets
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Gitleaks report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: gitleaks-report
+          path: gitleaks.sarif
+          if-no-files-found: ignore
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
 
@@ -256,7 +390,7 @@ jobs:
         run: npm run lint --if-present
 
       - name: Run tests (if present)
-        run: npm test --if-present
+        run: set -o pipefail; npm test --if-present 2>&1 | tee test-output.log
 
       - name: Run Snyk scan
         env:
@@ -267,7 +401,7 @@ jobs:
 
       - name: Set up Java 17
         id: setup-java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '17'
@@ -282,7 +416,7 @@ jobs:
           SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
           SONAR_SCANNER_JRE: ${{ steps.setup-java.outputs.java-home }}
         if: ${{ env.SONAR_TOKEN != '' }}
-        uses: SonarSource/sonarqube-scan-action@v5.0.0
+        uses: SonarSource/sonarqube-scan-action@0303d6b62e310685c0e34d0b9cde218036885c4d # v5.0.0
         with:
           projectBaseDir: .
           args: >
@@ -305,8 +439,12 @@ jobs:
           test -f "$report_file"
           ce_task_url=$(sed -n 's/^ceTaskUrl=//p' "$report_file")
           test -n "$ce_task_url"
+          case "$ce_task_url" in
+            https://*) ;;
+            *) echo "Refusing non-HTTPS SonarCloud task URL"; exit 1 ;;
+          esac
           for attempt in {1..30}; do
-            ce_task=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" "$ce_task_url")
+            ce_task=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" "$ce_task_url")
             ce_status=$(jq -r '.task.status' <<< "$ce_task")
             case "$ce_status" in
               SUCCESS) break ;;
@@ -332,11 +470,11 @@ jobs:
             sonar_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
             measure_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
           fi
-          measures=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" \
+          measures=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" \
             --get "$sonar_url/api/measures/component" \
             "${measure_scope[@]}" \
             --data-urlencode "metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc")
-          quality_gate=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" \
+          quality_gate=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" \
             --get "$sonar_url/api/qualitygates/project_status" \
             "${sonar_scope[@]}")
           metric() {
@@ -370,30 +508,33 @@ jobs:
           fi
 
       - name: Build Docker image for release
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           file: ./Dockerfile
           push: false
           tags: ${{ env.GHCR_IMAGE }}:${{ github.sha }}
 
-      - name: Install syft and trivy
-        run: |
-          set -eux
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
-          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-
       - name: Generate SBOM from source
-        run: |
-          syft dir:. -o cyclonedx-json=./image-sbom.json
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: image-sbom.json
 
       - name: Scan repository filesystem with Trivy
-        run: |
-          trivy fs --format json --output image-scan.json --severity HIGH,CRITICAL --ignore-unfixed .
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: json
+          output: image-scan.json
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
 
       - name: Upload image scan artifacts
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: image-scan-artifacts
           path: |
@@ -428,7 +569,7 @@ jobs:
           echo "Pipeline summary: digest=$image_digest, Trivy critical=$critical, high=$high, unfixed=$unfixed, SBOM components=$components"
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -439,7 +580,7 @@ jobs:
           docker push ${{ env.GHCR_IMAGE }}:${{ github.sha }}
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
         with:
           cosign-release: 'v2.4.1'
 
@@ -459,9 +600,53 @@ jobs:
           cosign verify --key cosign.pub "$image_ref"
           cosign verify-attestation --key cosign.pub "$image_ref"
 
+      - name: Generate AI release report
+        if: ${{ env.AI_ENABLED == 'true' }}
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_API_URL: ${{ vars.AI_API_URL || 'https://api.groq.com/openai/v1/chat/completions' }}
+          AI_MODEL: ${{ vars.AI_MODEL || 'llama-3.3-70b-versatile' }}
+          BASE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          diff_text=$(git diff --no-ext-diff "$BASE_SHA...$GITHUB_SHA" -- . ':!package-lock.json' ':!*.lock' | head -c 12000 || true)
+          diff_text=$(printf '%s' "$diff_text" | sed -E 's/(password|token|secret|api[_-]?key|private[_-]?key)[^[:space:]=]*[[:space:]]*=[[:space:]]*[^[:space:]]+/\1=<REDACTED>/Ig')
+          scan_summary=$(jq -c '{critical: ([.Results[]?.Vulnerabilities[]? | select(.severity == "CRITICAL")] | length), high: ([.Results[]?.Vulnerabilities[]? | select(.severity == "HIGH")] | length)}' image-scan.json 2>/dev/null || echo '{}')
+          sbom_components=$(jq '.components | length' image-sbom.json 2>/dev/null || echo 'unavailable')
+          image_digest="${IMAGE_DIGEST:-not available}"
+          test_results=$(head -c 4000 test-output.log 2>/dev/null || echo 'unavailable')
+          request=$(jq -n --arg model "$AI_MODEL" --arg diff "$diff_text" --arg scans "$scan_summary" --arg components "$sbom_components" --arg digest "$image_digest" --arg tests "$test_results" '{model: $model, temperature: 0.1, messages: [{role: "system", content: "You are a CI/CD assistant. Produce a concise advisory release report in Markdown. Use only the supplied evidence. Do not invent findings. Never include secrets."}, {role: "user", content: ("Summarize release readiness. Include what changed, security risk, rollback concerns, and recommended next action. Mark unavailable data clearly.\n\nSecurity counts: " + $scans + "\nSBOM components: " + $components + "\nImage digest: " + $digest + "\nSignature and SBOM attestation: verified\n\nTest output:\n" + $tests + "\n\nDiff:\n" + $diff)}]}')
+          response_file=$(mktemp)
+          case "$AI_API_URL" in
+            https://*) ;;
+            *) echo "Refusing non-HTTPS AI provider URL"; exit 1 ;;
+          esac
+          set +e
+          http_status=$(curl --proto '=https' --tlsv1.2 --silent --show-error --max-time 60 --output "$response_file" --write-out '%{http_code}' --header "Authorization: Bearer $AI_API_KEY" --header 'Content-Type: application/json' --data "$request" "$AI_API_URL")
+          curl_exit=$?
+          set -e
+          if [ "$curl_exit" -ne 0 ]; then http_status='000'; fi
+          report=$(cat "$response_file")
+          rm -f "$response_file"
+          if [ "$http_status" = "200" ]; then
+            ai_text=$(jq -r '.choices[0].message.content // empty' <<< "$report")
+          else
+            provider_error=$(jq -r '.error.message // .message // "no provider error message"' <<< "$report" 2>/dev/null || echo 'unparseable provider response')
+            ai_text="AI release report unavailable: provider returned HTTP $http_status. $provider_error"
+            echo "AI provider request failed: URL=$AI_API_URL MODEL=$AI_MODEL HTTP_STATUS=$http_status"
+          fi
+          if [ -z "$ai_text" ]; then
+            ai_text='AI release report unavailable: the provider returned no report.'
+          fi
+          {
+            echo "## AI release report (advisory)"
+            echo ""
+            printf '%s\n' "$ai_text"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Create GitHub release
         if: ${{ success() }}
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@c12583777ecdfd3be55c69cf75464299dc01057e # v3
         with:
           tag_name: release-${{ github.sha }}
           name: Release ${{ github.sha }}
