@@ -104,8 +104,6 @@ jobs:
                 ;;
             esac
           done
-          analysis_id=$(jq -r '.task.analysisId // empty' <<< "$ce_task")
-          test -n "$analysis_id"
           sonar_scope=(--data-urlencode "projectKey=$SONAR_PROJECT_KEY")
           measure_scope=(--data-urlencode "component=$SONAR_PROJECT_KEY")
           if [ -n "$SONAR_PULL_REQUEST" ]; then
@@ -118,7 +116,7 @@ jobs:
             --data-urlencode "metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc")
           quality_gate=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" \
             --get "$sonar_url/api/qualitygates/project_status" \
-            --data-urlencode "analysisId=$analysis_id")
+            "${sonar_scope[@]}")
           metric() {
             jq -r --arg key "$1" '([.component.measures[]? | select(.metric == $key) | .value] | first) // "n/a"' <<< "$measures"
           }
@@ -320,8 +318,6 @@ jobs:
                 ;;
             esac
           done
-          analysis_id=$(jq -r '.task.analysisId // empty' <<< "$ce_task")
-          test -n "$analysis_id"
           sonar_scope=(--data-urlencode "projectKey=$SONAR_PROJECT_KEY")
           measure_scope=(--data-urlencode "component=$SONAR_PROJECT_KEY")
           if [ -n "$SONAR_PULL_REQUEST" ]; then
@@ -334,7 +330,7 @@ jobs:
             --data-urlencode "metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc")
           quality_gate=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" \
             --get "$sonar_url/api/qualitygates/project_status" \
-            --data-urlencode "analysisId=$analysis_id")
+            "${sonar_scope[@]}")
           metric() {
             jq -r --arg key "$1" '([.component.measures[]? | select(.metric == $key) | .value] | first) // "n/a"' <<< "$measures"
           }
