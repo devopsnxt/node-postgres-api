@@ -217,14 +217,16 @@ jobs:
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          COSIGN_YES: 'true'
         run: |
-          echo "$COSIGN_PRIVATE_KEY" > cosign.key
-          chmod 600 cosign.key
-          cosign public-key --key cosign.key cosign.pub
-          cosign sign --key cosign.key ${{ env.GHCR_IMAGE }}:${{ github.sha }}
-          cosign attach sbom --sbom image-sbom.json ${{ env.GHCR_IMAGE }}:${{ github.sha }}
-          cosign verify --key cosign.pub ${{ env.GHCR_IMAGE }}:${{ github.sha }}
-          cosign verify-attestation --key cosign.pub --type sbom ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+          cosign public-key --key env://COSIGN_PRIVATE_KEY cosign.pub
+          image_digest=$(docker buildx imagetools inspect "${{ env.GHCR_IMAGE }}:${{ github.sha }}" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          test -n "$image_digest"
+          image_ref="${{ env.GHCR_IMAGE }}@$image_digest"
+          cosign sign --key env://COSIGN_PRIVATE_KEY "$image_ref"
+          cosign attach sbom --sbom image-sbom.json "$image_ref"
+          cosign verify --key cosign.pub "$image_ref"
+          cosign verify-attestation --key cosign.pub --type sbom "$image_ref"
 
       - name: Create GitHub release
         if: ${{ success() }}
