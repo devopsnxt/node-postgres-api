@@ -219,7 +219,7 @@ jobs:
           COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
           COSIGN_YES: 'true'
         run: |
-          cosign public-key --key env://COSIGN_PRIVATE_KEY --output-key-file cosign.pub
+          cosign public-key --key env://COSIGN_PRIVATE_KEY > cosign.pub
           image_digest=$(docker buildx imagetools inspect "${{ env.GHCR_IMAGE }}:${{ github.sha }}" --format '{{json .Manifest.Digest}}' | tr -d '"')
           test -n "$image_digest"
           image_ref="${{ env.GHCR_IMAGE }}@$image_digest"
