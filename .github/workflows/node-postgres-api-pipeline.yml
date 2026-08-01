@@ -77,20 +77,24 @@ jobs:
       - name: Validate SonarCloud configuration
         if: ${{ env.SONAR_TOKEN != '' }}
         env:
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
           SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
         run: |
           set -euo pipefail
+          test -n "$SONAR_HOST_URL" || { echo "SONAR_HOST_URL is missing"; exit 1; }
           test -n "$SONAR_TOKEN" || { echo "SONAR_TOKEN is missing"; exit 1; }
           test -n "$SONAR_ORGANIZATION" || { echo "SONAR_ORGANIZATION repository variable is missing"; exit 1; }
           test -n "$SONAR_PROJECT_KEY" || { echo "SONAR_PROJECT_KEY repository variable is missing"; exit 1; }
+          echo "SonarCloud host URL is configured: $SONAR_HOST_URL"
           echo "SonarCloud organization is configured: ${SONAR_ORGANIZATION:0:3}***"
           echo "SonarCloud project key is configured: ${SONAR_PROJECT_KEY:0:3}***"
           echo "SonarCloud token length: ${#SONAR_TOKEN}"
 
       - name: Run SonarCloud scan
         env:
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
           SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
@@ -100,8 +104,10 @@ jobs:
         with:
           projectBaseDir: .
           args: >
+            -Dsonar.host.url=${{ env.SONAR_HOST_URL }}
             -Dsonar.organization=${{ env.SONAR_ORGANIZATION }}
             -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
+            -Dsonar.login=${{ env.SONAR_TOKEN }}
             -Dsonar.sources=.
             -Dsonar.projectName=node-postgres-api
             -Dsonar.qualitygate.wait=true
@@ -347,20 +353,24 @@ jobs:
       - name: Validate SonarCloud configuration
         if: ${{ env.SONAR_TOKEN != '' }}
         env:
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
           SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
         run: |
           set -euo pipefail
+          test -n "$SONAR_HOST_URL" || { echo "SONAR_HOST_URL is missing"; exit 1; }
           test -n "$SONAR_TOKEN" || { echo "SONAR_TOKEN is missing"; exit 1; }
           test -n "$SONAR_ORGANIZATION" || { echo "SONAR_ORGANIZATION repository variable is missing"; exit 1; }
           test -n "$SONAR_PROJECT_KEY" || { echo "SONAR_PROJECT_KEY repository variable is missing"; exit 1; }
+          echo "SonarCloud host URL is configured: $SONAR_HOST_URL"
           echo "SonarCloud organization is configured: ${SONAR_ORGANIZATION:0:3}***"
           echo "SonarCloud project key is configured: ${SONAR_PROJECT_KEY:0:3}***"
           echo "SonarCloud token length: ${#SONAR_TOKEN}"
 
       - name: Run SonarCloud scan
         env:
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
           SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
@@ -370,8 +380,10 @@ jobs:
         with:
           projectBaseDir: .
           args: >
+            -Dsonar.host.url=${{ env.SONAR_HOST_URL }}
             -Dsonar.organization=${{ env.SONAR_ORGANIZATION }}
             -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
+            -Dsonar.login=${{ env.SONAR_TOKEN }}
             -Dsonar.sources=.
             -Dsonar.projectName=node-postgres-api
             -Dsonar.qualitygate.wait=true
