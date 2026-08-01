@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: node-postgres-api-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 env:
   APP_NAME: node-postgres-api
   GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/node-postgres-api
