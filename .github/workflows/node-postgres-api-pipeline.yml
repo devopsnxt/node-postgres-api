@@ -404,12 +404,15 @@ jobs:
           SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
           SONAR_PULL_REQUEST: ${{ github.event.pull_request.number }}
           SONAR_BRANCH: ${{ github.ref_name }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
         run: |
           set -euo pipefail
-          sonar_url="https://sonarcloud.io"
+          sonar_url="${SONAR_HOST_URL:-https://sonarcloud.io}"
+          echo "Using Sonar URL: $sonar_url"
           report_file=".scannerwork/report-task.txt"
           test -f "$report_file"
           ce_task_url=$(sed -n 's/^ceTaskUrl=//p' "$report_file")
+          echo "Task URL: $ce_task_url"
           test -n "$ce_task_url"
           case "$ce_task_url" in
             https://*) ;;
