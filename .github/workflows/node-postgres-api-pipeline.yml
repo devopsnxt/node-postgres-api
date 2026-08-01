@@ -609,13 +609,16 @@ jobs:
           BASE_SHA: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          diff_text=$(git diff --no-ext-diff "$BASE_SHA...$GITHUB_SHA" -- . ':!package-lock.json' ':!*.lock' | head -c 12000 || true)
+          changed_files=$(git diff --name-only "$BASE_SHA...$GITHUB_SHA" || true)
+          diff_text=$(git diff --no-ext-diff "$BASE_SHA...$GITHUB_SHA" -- . ':!package-lock.json' ':!*.lock' || true)
           diff_text=$(printf '%s' "$diff_text" | sed -E 's/(password|token|secret|api[_-]?key|private[_-]?key)[^[:space:]=]*[[:space:]]*=[[:space:]]*[^[:space:]]+/\1=<REDACTED>/Ig')
-          scan_summary=$(jq -c '{critical: ([.Results[]?.Vulnerabilities[]? | select(.severity == "CRITICAL")] | length), high: ([.Results[]?.Vulnerabilities[]? | select(.severity == "HIGH")] | length)}' image-scan.json 2>/dev/null || echo '{}')
+          diff_text="${diff_text:0:12000}"
+          critical=$(jq '[.Results[]?.Vulnerabilities[]? | select(.severity == "CRITICAL")] | length' image-scan.json 2>/dev/null || echo 'unavailable')
+          high=$(jq '[.Results[]?.Vulnerabilities[]? | select(.severity == "HIGH")] | length' image-scan.json 2>/dev/null || echo 'unavailable')
           sbom_components=$(jq '.components | length' image-sbom.json 2>/dev/null || echo 'unavailable')
           image_digest="${IMAGE_DIGEST:-not available}"
           test_results=$(head -c 4000 test-output.log 2>/dev/null || echo 'unavailable')
-          request=$(jq -n --arg model "$AI_MODEL" --arg diff "$diff_text" --arg scans "$scan_summary" --arg components "$sbom_components" --arg digest "$image_digest" --arg tests "$test_results" '{model: $model, temperature: 0.1, messages: [{role: "system", content: "You are a CI/CD assistant. Produce a concise advisory release report in Markdown. Use only the supplied evidence. Do not invent findings. Never include secrets."}, {role: "user", content: ("Summarize release readiness. Include what changed, security risk, rollback concerns, and recommended next action. Mark unavailable data clearly.\n\nSecurity counts: " + $scans + "\nSBOM components: " + $components + "\nImage digest: " + $digest + "\nSignature and SBOM attestation: verified\n\nTest output:\n" + $tests + "\n\nDiff:\n" + $diff)}]}')
+          request=$(jq -n --arg model "$AI_MODEL" --arg files "$changed_files" --arg diff "$diff_text" --arg critical "$critical" --arg high "$high" --arg components "$sbom_components" --arg digest "$image_digest" --arg tests "$test_results" '{model: $model, temperature: 0.1, messages: [{role: "system", content: "You are producing an advisory release-readiness assessment. Return JSON only, with no Markdown fences or extra text. Use only supplied evidence. Never invent values, files, migrations, or risks, and never include secrets. Deterministic facts marked authoritative must be copied exactly. Use exactly this schema: {readiness:pass|pass_with_warnings|manual_review|unavailable,summary:string,apiContractChange:yes|no|unknown,databaseMigration:yes|no|unknown,configurationChange:yes|no|unknown,authenticationChange:yes|no|unknown,dependencyUpgrade:yes|no|unknown,containerBaseImageChange:yes|no|unknown,rollbackConcern:low|medium|high|unknown,manualApprovalRequired:boolean,risks:[string],recommendedAction:string}."}, {role: "user", content: ("Assess release readiness. AI must not replace deterministic gates or production approval.\n\nAuthoritative deterministic facts:\nTrivy critical vulnerabilities: " + $critical + "\nTrivy high vulnerabilities: " + $high + "\nSBOM components: " + $components + "\nImage digest: " + $digest + "\nImage signature verification: passed\nSBOM attestation verification: passed\n\nChanged files:\n" + $files + "\n\nTest output:\n" + $tests + "\n\nRedacted diff:\n" + $diff)}]}')
           response_file=$(mktemp)
           case "$AI_API_URL" in
             https://*) ;;
@@ -630,18 +633,51 @@ jobs:
           rm -f "$response_file"
           if [ "$http_status" = "200" ]; then
             ai_text=$(jq -r '.choices[0].message.content // empty' <<< "$report")
+            if ! printf '%s' "$ai_text" | jq -e 'type == "object" and (.readiness | IN("pass", "pass_with_warnings", "manual_review", "unavailable")) and (.summary | type == "string") and (.apiContractChange | IN("yes", "no", "unknown")) and (.databaseMigration | IN("yes", "no", "unknown")) and (.configurationChange | IN("yes", "no", "unknown")) and (.authenticationChange | IN("yes", "no", "unknown")) and (.dependencyUpgrade | IN("yes", "no", "unknown")) and (.containerBaseImageChange | IN("yes", "no", "unknown")) and (.rollbackConcern | IN("low", "medium", "high", "unknown")) and (.manualApprovalRequired | type == "boolean") and (.risks | type == "array") and all(.risks[]; type == "string") and (.recommendedAction | type == "string")' >/dev/null 2>&1; then
+              ai_text=''
+              echo 'AI release assessment unavailable: provider returned invalid JSON or schema.'
+            fi
           else
             provider_error=$(jq -r '.error.message // .message // "no provider error message"' <<< "$report" 2>/dev/null || echo 'unparseable provider response')
-            ai_text="AI release report unavailable: provider returned HTTP $http_status. $provider_error"
+            ai_text=''
             echo "AI provider request failed: URL=$AI_API_URL MODEL=$AI_MODEL HTTP_STATUS=$http_status"
+            echo "AI release assessment unavailable: provider returned HTTP $http_status. $provider_error"
           fi
           if [ -z "$ai_text" ]; then
-            ai_text='AI release report unavailable: the provider returned no report.'
+            ai_text='{"readiness":"unavailable","summary":"AI release assessment unavailable.","apiContractChange":"unknown","databaseMigration":"unknown","configurationChange":"unknown","authenticationChange":"unknown","dependencyUpgrade":"unknown","containerBaseImageChange":"unknown","rollbackConcern":"unknown","manualApprovalRequired":true,"risks":["AI assessment unavailable; review deterministic reports and release gates manually."],"recommendedAction":"Do not use this report as release approval; follow normal deterministic gates and human approval."}'
           fi
+          readiness=$(jq -r '.readiness' <<< "$ai_text")
+          summary=$(jq -r '.summary' <<< "$ai_text")
           {
-            echo "## AI release report (advisory)"
+            echo "## AI release intelligence (advisory)"
             echo ""
-            printf '%s\n' "$ai_text"
+            echo "**Release readiness:** $readiness"
+            echo ""
+            echo "**Summary:** $summary"
+            echo ""
+            echo "| Check | Assessment |"
+            echo "|---|---|"
+            echo "| Tests | Deterministic checks completed before release assessment |"
+            echo "| Trivy critical vulnerabilities | $critical |"
+            echo "| Trivy high vulnerabilities | $high |"
+            echo "| SBOM components | $sbom_components |"
+            echo "| Image signature | Verified |"
+            echo "| SBOM attestation | Verified |"
+            echo "| API contract change | $(jq -r '.apiContractChange' <<< "$ai_text") |"
+            echo "| Database migration | $(jq -r '.databaseMigration' <<< "$ai_text") |"
+            echo "| Configuration change | $(jq -r '.configurationChange' <<< "$ai_text") |"
+            echo "| Authentication change | $(jq -r '.authenticationChange' <<< "$ai_text") |"
+            echo "| Dependency upgrade | $(jq -r '.dependencyUpgrade' <<< "$ai_text") |"
+            echo "| Container base-image change | $(jq -r '.containerBaseImageChange' <<< "$ai_text") |"
+            echo "| Rollback concern | $(jq -r '.rollbackConcern' <<< "$ai_text") |"
+            echo "| Manual approval required | $(jq -r '.manualApprovalRequired' <<< "$ai_text") |"
+            echo ""
+            echo "**Risks:**"
+            jq -r 'if (.risks | length) == 0 then "None reported." else .risks[] | "- \(.)" end' <<< "$ai_text"
+            echo ""
+            echo "**Recommended action:** $(jq -r '.recommendedAction' <<< "$ai_text")"
+            echo ""
+            echo "AI is advisory and does not replace deterministic gates or production approval."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create GitHub release
