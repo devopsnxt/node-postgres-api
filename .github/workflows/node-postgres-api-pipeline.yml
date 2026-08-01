@@ -14,6 +14,10 @@ jobs:
   pull-request:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -172,6 +176,7 @@ jobs:
 
       - name: Comment PR with build summary
         uses: peter-evans/create-or-update-comment@v4
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           issue-number: ${{ github.event.pull_request.number }}
