@@ -1,0 +1,138 @@
+name: AI Controlled Automation
+
+on:
+  workflow_dispatch:
+    inputs:
+      request:
+        description: Change or test request for the AI assistant
+        required: true
+        type: string
+      files:
+        description: Comma-separated existing files the assistant may change
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate-draft:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      AI_API_KEY: ${{ secrets.AI_API_KEY }}
+      AI_API_URL: ${{ vars.AI_API_URL || 'https://api.groq.com/openai/v1/chat/completions' }}
+      AI_MODEL: ${{ vars.AI_MODEL || 'llama-3.3-70b-versatile' }}
+      CHANGE_REQUEST: ${{ inputs.request }}
+      ALLOWED_FILES: ${{ inputs.files }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Validate automation inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$AI_API_KEY"
+          case "$AI_API_URL" in
+            https://*) ;;
+            *) echo 'Refusing non-HTTPS AI provider URL'; exit 1 ;;
+          esac
+          printf '%s' "$ALLOWED_FILES" | tr ',' '\n' | while IFS= read -r file; do
+            file=$(printf '%s' "$file" | xargs)
+            [ -n "$file" ] || continue
+            case "$file" in
+              *.js|*.json|*.md|*.test.*|*.spec.*|test/*|tests/*|__tests__/*) ;;
+              *) echo "File is outside the Phase 3 allowlist: $file"; exit 1 ;;
+            esac
+            case "$file" in
+              .github/*|Dockerfile|*.yml|*.yaml|*.env*|*secret*|*credential*)
+                echo "Sensitive or workflow file is not eligible for AI changes: $file"
+                exit 1
+                ;;
+            esac
+          done
+
+      - name: Generate and validate patch
+        id: generate
+        shell: bash
+        run: |
+          set -euo pipefail
+          allowed_context=''
+          printf '%s' "$ALLOWED_FILES" | tr ',' '\n' | while IFS= read -r file; do
+            file=$(printf '%s' "$file" | xargs)
+            [ -n "$file" ] || continue
+            if [ -f "$file" ]; then
+              content=$(sed -E 's/(password|token|secret|api[_-]?key|private[_-]?key)[^[:space:]=]*[[:space:]]*=[[:space:]]*[^[:space:]]+/\1=<REDACTED>/Ig' "$file")
+              printf '\n===== %s =====\n%s\n' "$file" "$content"
+            fi
+          done > allowed-context.txt
+          allowed_context=$(<allowed-context.txt)
+          allowed_context="${allowed_context:0:24000}"
+          request=$(jq -n \
+            --arg model "$AI_MODEL" \
+            --arg task "$CHANGE_REQUEST" \
+            --arg files "$ALLOWED_FILES" \
+            --arg context "$allowed_context" \
+            '{model:$model,temperature:0.1,messages:[
+              {role:"system",content:"You prepare a small code change for a human-reviewed draft pull request. Return JSON only, with no Markdown fences. Never modify workflows, Dockerfiles, environment files, secrets, security settings, branch protection, or deployment configuration. Change only the explicitly allowed files. Do not include secrets. Use this exact schema: {title:string,body:string,patch:string}. The patch must be a valid unified diff and must not contain files outside the allowed list."},
+              {role:"user",content:("Task: " + $task + "\nAllowed files: " + $files + "\nCurrent file contents:\n" + $context)}
+            ]}')
+          response_file=$(mktemp)
+          set +e
+          http_status=$(curl --proto '=https' --tlsv1.2 --silent --show-error --max-time 60 \
+            --output "$response_file" --write-out '%{http_code}' \
+            --header "Authorization: Bearer $AI_API_KEY" \
+            --header 'Content-Type: application/json' \
+            --data "$request" "$AI_API_URL")
+          curl_exit=$?
+          set -e
+          report=$(cat "$response_file")
+          rm -f "$response_file"
+          test "$curl_exit" -eq 0
+          test "$http_status" = 200
+          ai_text=$(jq -r '.choices[0].message.content // empty' <<< "$report")
+          printf '%s' "$ai_text" | jq -e 'type == "object" and (.title | type == "string" and length > 0) and (.body | type == "string") and (.patch | type == "string" and length > 0)' > generated.json
+          jq -r '.patch' generated.json > change.patch
+          git apply --check change.patch
+          git apply --whitespace=error change.patch
+          changed_files=$(git diff --name-only)
+          while IFS= read -r changed_file; do
+            [ -n "$changed_file" ] || continue
+            case ",$ALLOWED_FILES," in
+              *,"$changed_file",*) ;;
+              *) echo "Generated patch changed an unapproved file: $changed_file"; exit 1 ;;
+            esac
+            case "$changed_file" in
+              .github/*|Dockerfile|*.yml|*.yaml|*.env*|*secret*|*credential*)
+                echo "Generated patch changed a prohibited file: $changed_file"; exit 1 ;;
+                ;;
+            esac
+          done <<< "$changed_files"
+          npm test --if-present
+          title=$(jq -r '.title' generated.json)
+          body=$(jq -r '.body' generated.json)
+          printf '%s\n\nGenerated by the Phase 3 AI workflow. Human review and all normal CI checks are required.' "$body" > pr-body.md
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+
+      - name: Create draft pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GENERATED_TITLE: ${{ steps.generate.outputs.title }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="ai/draft-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "$branch"
+          git add -A
+          git commit -m "AI draft: $GENERATED_TITLE"
+          git push --set-upstream origin "$branch"
+          gh pr create --draft --base main --head "$branch" \
+            --title "$GENERATED_TITLE" \
+            --body-file pr-body.md
