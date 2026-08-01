@@ -79,6 +79,7 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
           SONAR_PULL_REQUEST: ${{ github.event.pull_request.number }}
+          SONAR_BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           sonar_url="https://sonarcloud.io"
@@ -109,6 +110,9 @@ jobs:
           if [ -n "$SONAR_PULL_REQUEST" ]; then
             sonar_scope+=(--data-urlencode "pullRequest=$SONAR_PULL_REQUEST")
             measure_scope+=(--data-urlencode "pullRequest=$SONAR_PULL_REQUEST")
+          else
+            sonar_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
+            measure_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
           fi
           measures=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" \
             --get "$sonar_url/api/measures/component" \
@@ -293,6 +297,7 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
           SONAR_PULL_REQUEST: ${{ github.event.pull_request.number }}
+          SONAR_BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           sonar_url="https://sonarcloud.io"
@@ -323,6 +328,9 @@ jobs:
           if [ -n "$SONAR_PULL_REQUEST" ]; then
             sonar_scope+=(--data-urlencode "pullRequest=$SONAR_PULL_REQUEST")
             measure_scope+=(--data-urlencode "pullRequest=$SONAR_PULL_REQUEST")
+          else
+            sonar_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
+            measure_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
           fi
           measures=$(curl --fail --silent --show-error --user "$SONAR_TOKEN:" \
             --get "$sonar_url/api/measures/component" \
