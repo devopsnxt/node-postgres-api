@@ -27,6 +27,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
@@ -40,7 +42,7 @@ jobs:
         run: npm run lint --if-present
 
       - name: Run tests (if present)
-        run: npm test --if-present
+        run: set -o pipefail; npm test --if-present 2>&1 | tee test-output.log
 
       - name: Run Snyk scan
         env:
@@ -225,7 +227,8 @@ jobs:
           diff_text=$(printf '%s' "$diff_text" | sed -E 's/(password|token|secret|api[_-]?key|private[_-]?key)[^[:space:]=]*[[:space:]]*=[[:space:]]*[^[:space:]]+/\1=<REDACTED>/Ig')
           scan_summary=$(jq -c '{critical: ([.Results[]?.Vulnerabilities[]? | select(.severity == "CRITICAL")] | length), high: ([.Results[]?.Vulnerabilities[]? | select(.severity == "HIGH")] | length)}' image-scan.json 2>/dev/null || echo '{}')
           sbom_components=$(jq '.components | length' image-sbom.json 2>/dev/null || echo 'unavailable')
-          request=$(jq -n --arg model "$AI_MODEL" --arg diff "$diff_text" --arg scans "$scan_summary" --arg components "$sbom_components" '{model: $model, temperature: 0.1, messages: [{role: "system", content: "You are a CI/CD assistant. Produce a concise advisory report in Markdown. Use only the supplied evidence. Do not invent findings, file names, or line numbers. Never include secrets."}, {role: "user", content: ("Summarize this pipeline run. Include: what changed, likely risks, missing tests, and recommended next action. Mark unavailable data clearly.\n\nSecurity counts: " + $scans + "\nSBOM components: " + $components + "\n\nDiff:\n" + $diff)}]}')
+          test_results=$(head -c 4000 test-output.log 2>/dev/null || echo 'unavailable')
+          request=$(jq -n --arg model "$AI_MODEL" --arg diff "$diff_text" --arg scans "$scan_summary" --arg components "$sbom_components" --arg tests "$test_results" '{model: $model, temperature: 0.1, messages: [{role: "system", content: "You are a CI/CD assistant. Produce a concise advisory report in Markdown. Use only the supplied evidence. Do not invent findings, file names, or line numbers. Never include secrets."}, {role: "user", content: ("Summarize this pipeline run. Include: what changed, likely risks, missing tests, and recommended next action. Mark unavailable data clearly.\n\nSecurity counts: " + $scans + "\nSBOM components: " + $components + "\n\nTest output:\n" + $tests + "\n\nDiff:\n" + $diff)}]}')
           response_file=$(mktemp)
           set +e
           http_status=$(curl --silent --show-error --max-time 60 \
@@ -299,6 +302,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v5
@@ -312,7 +317,7 @@ jobs:
         run: npm run lint --if-present
 
       - name: Run tests (if present)
-        run: npm test --if-present
+        run: set -o pipefail; npm test --if-present 2>&1 | tee test-output.log
 
       - name: Run Snyk scan
         env:
@@ -529,7 +534,8 @@ jobs:
           scan_summary=$(jq -c '{critical: ([.Results[]?.Vulnerabilities[]? | select(.severity == "CRITICAL")] | length), high: ([.Results[]?.Vulnerabilities[]? | select(.severity == "HIGH")] | length)}' image-scan.json 2>/dev/null || echo '{}')
           sbom_components=$(jq '.components | length' image-sbom.json 2>/dev/null || echo 'unavailable')
           image_digest="${IMAGE_DIGEST:-not available}"
-          request=$(jq -n --arg model "$AI_MODEL" --arg diff "$diff_text" --arg scans "$scan_summary" --arg components "$sbom_components" --arg digest "$image_digest" '{model: $model, temperature: 0.1, messages: [{role: "system", content: "You are a CI/CD assistant. Produce a concise advisory release report in Markdown. Use only the supplied evidence. Do not invent findings. Never include secrets."}, {role: "user", content: ("Summarize release readiness. Include what changed, security risk, rollback concerns, and recommended next action. Mark unavailable data clearly.\n\nSecurity counts: " + $scans + "\nSBOM components: " + $components + "\nImage digest: " + $digest + "\nSignature and SBOM attestation: verified\n\nDiff:\n" + $diff)}]}')
+          test_results=$(head -c 4000 test-output.log 2>/dev/null || echo 'unavailable')
+          request=$(jq -n --arg model "$AI_MODEL" --arg diff "$diff_text" --arg scans "$scan_summary" --arg components "$sbom_components" --arg digest "$image_digest" --arg tests "$test_results" '{model: $model, temperature: 0.1, messages: [{role: "system", content: "You are a CI/CD assistant. Produce a concise advisory release report in Markdown. Use only the supplied evidence. Do not invent findings. Never include secrets."}, {role: "user", content: ("Summarize release readiness. Include what changed, security risk, rollback concerns, and recommended next action. Mark unavailable data clearly.\n\nSecurity counts: " + $scans + "\nSBOM components: " + $components + "\nImage digest: " + $digest + "\nSignature and SBOM attestation: verified\n\nTest output:\n" + $tests + "\n\nDiff:\n" + $diff)}]}')
           response_file=$(mktemp)
           set +e
           http_status=$(curl --silent --show-error --max-time 60 --output "$response_file" --write-out '%{http_code}' --header "Authorization: Bearer $AI_API_KEY" --header 'Content-Type: application/json' --data "$request" "$AI_API_URL")
