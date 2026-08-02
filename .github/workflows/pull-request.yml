@@ -29,42 +29,33 @@ jobs:
       security-events: write
     env:
       AI_ENABLED: ${{ secrets.AI_API_KEY != '' && true || false }}
-      SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
-      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN || '' }}
-      SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION || '' }}
-      SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY || '' }}
-      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN || '' }}
 
     steps:
 
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
 
       ##########################################################
-      # Gitleaks
+      # Shared CI Checks
       ##########################################################
 
-      - name: Scan repository for secrets
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Check Gitleaks SARIF
-        id: check_gitleaks_sarif
-        run: |
-          if [ -f gitleaks.sarif ]; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Upload Gitleaks SARIF
-        if: steps.check_gitleaks_sarif.outputs.exists == 'true'
-        uses: github/codeql-action/upload-sarif@v4
+      - name: CI Checks
+        id: ci
+        uses: ./.github/actions/ci-checks
         with:
-          sarif_file: gitleaks.sarif
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          sonar-token: ${{ secrets.SONAR_TOKEN }}
+          sonar-host-url: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+          sonar-organization: ${{ vars.SONAR_ORGANIZATION }}
+          sonar-project-key: ${{ vars.SONAR_PROJECT_KEY }}
+          snyk-token: ${{ secrets.SNYK_TOKEN }}
+          docker-tags: ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+
+      ##########################################################
+      # Gitleaks Artifact (PR-only)
+      ##########################################################
 
       - name: Upload Gitleaks Artifact
         if: always()
@@ -75,214 +66,22 @@ jobs:
           if-no-files-found: ignore
 
       ##########################################################
-      # Node
-      ##########################################################
-
-      - name: Setup Node
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: 24
-
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-
-      ##########################################################
-      # CodeQL
-      ##########################################################
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
-        with:
-          languages: javascript
-
-      ##########################################################
-      # Lint
-      ##########################################################
-
-      - name: Run lint
-        run: npm run lint --if-present
-
-      ##########################################################
-      # Tests
-      ##########################################################
-
-      - name: Run tests
-        run: |
-          set -o pipefail
-          npm test --if-present 2>&1 | tee test-output.log
-
-      ##########################################################
-      # Snyk
-      ##########################################################
-
-      - name: Run Snyk Scan
-        if: ${{ env.SNYK_TOKEN != '' }}
-        env:
-          SNYK_TOKEN: ${{ env.SNYK_TOKEN }}
-        run: |
-          npx --ignore-scripts snyk@1.1306.2 test --all-projects
-      ##########################################################
-      # Java
-      ##########################################################
-
-      - name: Setup Java 17
-        id: setup-java
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Verify Java
-        run: java -version
-
-      ##########################################################
-      # SonarCloud
-      ##########################################################
-
-      - name: Validate Sonar configuration
-        run: |
-          set -euo pipefail
-
-          test -n "$SONAR_HOST_URL"
-          test -n "$SONAR_TOKEN"
-          test -n "$SONAR_ORGANIZATION"
-          test -n "$SONAR_PROJECT_KEY"
-
-      - name: SonarCloud Scan
-        if: ${{ env.SONAR_TOKEN != '' }}
-        uses: SonarSource/sonarqube-scan-action@0303d6b62e310685c0e34d0b9cde218036885c4d # v5.0.0
-        env:
-          SONAR_SCANNER_JRE: ${{ steps.setup-java.outputs.java-home }}
-          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
-          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
-          SONAR_ORGANIZATION: ${{ env.SONAR_ORGANIZATION }}
-          SONAR_PROJECT_KEY: ${{ env.SONAR_PROJECT_KEY }}
-        with:
-          projectBaseDir: .
-          args: >
-            -Dsonar.host.url=${{ env.SONAR_HOST_URL }}
-            -Dsonar.organization=${{ env.SONAR_ORGANIZATION }}
-            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
-            -Dsonar.projectName=node-postgres-api
-            -Dsonar.sources=.
-            -Dsonar.login=${{ env.SONAR_TOKEN }}
-            -Dsonar.qualitygate.wait=true
-            -Dsonar.qualitygate.timeout=300
-
-      ##########################################################
-      # CodeQL Analyze
-      ##########################################################
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4
-
-      ##########################################################
-      # Docker Build
-      ##########################################################
-
-      - name: Build Docker Image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
-        with:
-          context: .
-          file: ./Dockerfile
-          push: false
-          tags: ${{ env.GHCR_IMAGE }}:${{ github.sha }}
-
-      ##########################################################
-      # SBOM
-      ##########################################################
-
-      - name: Generate SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
-        with:
-          path: .
-          format: cyclonedx-json
-          output-file: image-sbom.json
-
-      ##########################################################
-      # Trivy JSON
-      ##########################################################
-
-      - name: Trivy Filesystem Scan (JSON)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          format: json
-          output: image-scan.json
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-
-      ##########################################################
-      # Trivy SARIF
-      ##########################################################
-
-      - name: Trivy Filesystem Scan (SARIF)
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          format: sarif
-          output: trivy-results.sarif
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-
-      - name: Check Trivy SARIF
-        id: check_trivy_sarif
-        run: |
-          if [ -f trivy-results.sarif ]; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Upload Trivy SARIF
-        if: steps.check_trivy_sarif.outputs.exists == 'true'
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: trivy-results.sarif
-
-      ##########################################################
-      # Upload Artifacts
-      ##########################################################
-
-      - name: Upload Scan Artifacts
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: image-scan-artifacts
-          path: |
-            image-scan.json
-            image-sbom.json
-            trivy-results.sarif
-      ##########################################################
       # Pipeline Summary
       ##########################################################
 
       - name: Generate Pipeline Summary
-        id: pipeline-summary
         if: always()
         run: |
-          critical=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' image-scan.json 2>/dev/null || echo "0")
-          high=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' image-scan.json 2>/dev/null || echo "0")
-          unfixed=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Status!="fixed")] | length' image-scan.json 2>/dev/null || echo "0")
-          components=$(jq '.components | length' image-sbom.json 2>/dev/null || echo "0")
-
-          echo "critical=$critical" >> "$GITHUB_OUTPUT"
-          echo "high=$high" >> "$GITHUB_OUTPUT"
-          echo "unfixed=$unfixed" >> "$GITHUB_OUTPUT"
-          echo "components=$components" >> "$GITHUB_OUTPUT"
-
           {
             echo "## Pull Request Validation"
             echo ""
             echo "| Item | Value |"
-            echo "|------|------|"
+            echo "|------|-------|"
             echo "| Commit | ${GITHUB_SHA} |"
-            echo "| Critical | $critical |"
-            echo "| High | $high |"
-            echo "| Unfixed | $unfixed |"
-            echo "| SBOM Components | $components |"
+            echo "| Critical | ${{ steps.ci.outputs.critical }} |"
+            echo "| High | ${{ steps.ci.outputs.high }} |"
+            echo "| Unfixed | ${{ steps.ci.outputs.unfixed }} |"
+            echo "| SBOM Components | ${{ steps.ci.outputs.components }} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       ##########################################################
@@ -375,16 +174,29 @@ jobs:
 
             | Severity | Count |
             |----------|------:|
-            | Critical | ${{ steps.pipeline-summary.outputs.critical }} |
-            | High | ${{ steps.pipeline-summary.outputs.high }} |
-            | Unfixed | ${{ steps.pipeline-summary.outputs.unfixed }} |
+            | Critical | ${{ steps.ci.outputs.critical }} |
+            | High | ${{ steps.ci.outputs.high }} |
+            | Unfixed | ${{ steps.ci.outputs.unfixed }} |
 
             **SBOM Components**
 
-            ${{ steps.pipeline-summary.outputs.components }}
+            ${{ steps.ci.outputs.components }}
 
             ---
 
             ## AI Review
 
             ${{ steps.ai-review.outputs.report }}
+
+      ##########################################################
+      # Autolabel PR
+      ##########################################################
+
+      - name: Autolabel Pull Request
+        uses: release-drafter/release-drafter@6a93d829887aa2e0748befe2e808c66c0ec6e4c7 # v6
+        continue-on-error: true
+        with:
+          disable-releaser: true
+          commitish: ${{ github.head_ref }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
