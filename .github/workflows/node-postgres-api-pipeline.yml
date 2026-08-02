@@ -451,21 +451,23 @@ jobs:
             measure_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
           fi
           measures="{}"
-          if measures=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" \
+          if ! measures=$(curl --proto '=https' --tlsv1.2 --silent --show-error --user "$SONAR_TOKEN:" \
             --get "$sonar_url/api/measures/component" \
             "${measure_scope[@]}" \
             --data-urlencode "metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc" 2>/dev/null); then
-            :
-          else
             echo "Warning: unable to fetch SonarCloud measures; using placeholder values."
           fi
           quality_gate="{}"
-          if quality_gate=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" \
+          if ! quality_gate=$(curl --proto '=https' --tlsv1.2 --silent --show-error --user "$SONAR_TOKEN:" \
             --get "$sonar_url/api/qualitygates/project_status" \
             "${sonar_scope[@]}" 2>/dev/null); then
-            :
-          else
             echo "Warning: unable to fetch SonarCloud quality gate; using placeholder values."
+          fi
+          if [ -z "$measures" ]; then
+            measures="{}"
+          fi
+          if [ -z "$quality_gate" ]; then
+            quality_gate="{}"
           fi
           metric() {
             jq -r --arg key "$1" '([.component.measures[]? | select(.metric == $key) | .value] | first) // "n/a"' <<< "$measures"
