@@ -420,7 +420,9 @@ jobs:
           esac
           task_status="UNKNOWN"
           for attempt in {1..30}; do
-            if ce_task=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" "$ce_task_url" 2>/dev/null); then
+            if ce_task=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+              --header "Authorization: Basic $(printf '%s:' "$SONAR_TOKEN" | base64 -w 0)" \
+              "$ce_task_url" 2>/dev/null); then
               task_status=$(jq -r '.task.status // "UNKNOWN"' <<< "$ce_task")
               case "$task_status" in
                 SUCCESS) break ;;
@@ -451,14 +453,16 @@ jobs:
             measure_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
           fi
           measures="{}"
-          if ! measures=$(curl --proto '=https' --tlsv1.2 --silent --show-error --user "$SONAR_TOKEN:" \
+          if ! measures=$(curl --proto '=https' --tlsv1.2 --silent --show-error \
+            --header "Authorization: Basic $(printf '%s:' "$SONAR_TOKEN" | base64 -w 0)" \
             --get "$sonar_url/api/measures/component" \
             "${measure_scope[@]}" \
             --data-urlencode "metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc" 2>/dev/null); then
             echo "Warning: unable to fetch SonarCloud measures; using placeholder values."
           fi
           quality_gate="{}"
-          if ! quality_gate=$(curl --proto '=https' --tlsv1.2 --silent --show-error --user "$SONAR_TOKEN:" \
+          if ! quality_gate=$(curl --proto '=https' --tlsv1.2 --silent --show-error \
+            --header "Authorization: Basic $(printf '%s:' "$SONAR_TOKEN" | base64 -w 0)" \
             --get "$sonar_url/api/qualitygates/project_status" \
             "${sonar_scope[@]}" 2>/dev/null); then
             echo "Warning: unable to fetch SonarCloud quality gate; using placeholder values."
