@@ -71,7 +71,7 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         if: ${{ env.SNYK_TOKEN != '' }}
         run: |
-          npx snyk@1.1306.2 test --all-projects
+          npx --ignore-scripts snyk@1.1306.2 test --all-projects
 
       - name: Set up Java 17
         id: setup-java
@@ -371,7 +371,7 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         if: ${{ env.SNYK_TOKEN != '' }}
         run: |
-          npx snyk@1.1306.2 test --all-projects
+          npx --ignore-scripts snyk@1.1306.2 test --all-projects
 
       - name: Set up Java 17
         id: setup-java
