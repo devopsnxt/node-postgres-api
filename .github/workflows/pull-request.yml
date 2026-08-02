@@ -1,0 +1,370 @@
+name: pull-request
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+concurrency:
+  group: node-postgres-api-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_NAME: node-postgres-api
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/node-postgres-api
+
+jobs:
+  pull-request:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+      issues: write
+      security-events: write
+    env:
+      AI_ENABLED: ${{ secrets.AI_API_KEY != '' && true || false }}
+      SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN || '' }}
+      SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION || '' }}
+      SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY || '' }}
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      ##########################################################
+      # Gitleaks
+      ##########################################################
+
+      - name: Scan repository for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Gitleaks SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gitleaks.sarif
+
+      - name: Upload Gitleaks Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: gitleaks.sarif
+          if-no-files-found: ignore
+
+      ##########################################################
+      # Node
+      ##########################################################
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm ci
+
+      ##########################################################
+      # CodeQL
+      ##########################################################
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+
+      ##########################################################
+      # Lint
+      ##########################################################
+
+      - name: Run lint
+        run: npm run lint --if-present
+
+      ##########################################################
+      # Tests
+      ##########################################################
+
+      - name: Run tests
+        run: |
+          set -o pipefail
+          npm test --if-present 2>&1 | tee test-output.log
+
+      ##########################################################
+      # Snyk
+      ##########################################################
+
+      - name: Run Snyk Scan
+        if: ${{ secrets.SNYK_TOKEN != '' }}
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          npx snyk test --all-projects
+      ##########################################################
+      # Java
+      ##########################################################
+
+      - name: Setup Java 17
+        id: setup-java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Verify Java
+        run: java -version
+
+      ##########################################################
+      # SonarCloud
+      ##########################################################
+
+      - name: Validate Sonar configuration
+        run: |
+          set -euo pipefail
+
+          test -n "$SONAR_HOST_URL"
+          test -n "$SONAR_TOKEN"
+          test -n "$SONAR_ORGANIZATION"
+          test -n "$SONAR_PROJECT_KEY"
+
+      - name: SonarCloud Scan
+        if: ${{ env.SONAR_TOKEN != '' }}
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_SCANNER_JRE: ${{ steps.setup-java.outputs.java-home }}
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+          SONAR_ORGANIZATION: ${{ env.SONAR_ORGANIZATION }}
+          SONAR_PROJECT_KEY: ${{ env.SONAR_PROJECT_KEY }}
+        with:
+          projectBaseDir: .
+          args: >
+            -Dsonar.host.url=${{ env.SONAR_HOST_URL }}
+            -Dsonar.organization=${{ env.SONAR_ORGANIZATION }}
+            -Dsonar.projectKey=${{ env.SONAR_PROJECT_KEY }}
+            -Dsonar.projectName=node-postgres-api
+            -Dsonar.sources=.
+            -Dsonar.login=${{ env.SONAR_TOKEN }}
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=300
+
+      ##########################################################
+      # CodeQL Analyze
+      ##########################################################
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+      ##########################################################
+      # Docker Build
+      ##########################################################
+
+      - name: Build Docker Image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+
+      ##########################################################
+      # SBOM
+      ##########################################################
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: image-sbom.json
+
+      ##########################################################
+      # Trivy JSON
+      ##########################################################
+
+      - name: Trivy Filesystem Scan (JSON)
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: json
+          output: image-scan.json
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      ##########################################################
+      # Trivy SARIF
+      ##########################################################
+
+      - name: Trivy Filesystem Scan (SARIF)
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+      ##########################################################
+      # Upload Artifacts
+      ##########################################################
+
+      - name: Upload Scan Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-scan-artifacts
+          path: |
+            image-scan.json
+            image-sbom.json
+            trivy-results.sarif
+      ##########################################################
+      # Pipeline Summary
+      ##########################################################
+
+      - name: Generate Pipeline Summary
+        id: pipeline-summary
+        if: always()
+        run: |
+          critical=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' image-scan.json 2>/dev/null || echo "0")
+          high=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' image-scan.json 2>/dev/null || echo "0")
+          unfixed=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Status!="fixed")] | length' image-scan.json 2>/dev/null || echo "0")
+          components=$(jq '.components | length' image-sbom.json 2>/dev/null || echo "0")
+
+          echo "critical=$critical" >> "$GITHUB_OUTPUT"
+          echo "high=$high" >> "$GITHUB_OUTPUT"
+          echo "unfixed=$unfixed" >> "$GITHUB_OUTPUT"
+          echo "components=$components" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Pull Request Validation"
+            echo ""
+            echo "| Item | Value |"
+            echo "|------|------|"
+            echo "| Commit | ${GITHUB_SHA} |"
+            echo "| Critical | $critical |"
+            echo "| High | $high |"
+            echo "| Unfixed | $unfixed |"
+            echo "| SBOM Components | $components |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      ##########################################################
+      # AI Review
+      ##########################################################
+
+      - name: AI Review
+        id: ai-review
+        if: ${{ env.AI_ENABLED == 'true' }}
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_API_URL: ${{ vars.AI_API_URL }}
+          AI_MODEL: ${{ vars.AI_MODEL }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          changed_files=$(git diff --name-only "$BASE_SHA...$GITHUB_SHA")
+
+          prompt=$(cat <<EOF
+          Review the changed files.
+
+          Focus on:
+          - Bugs
+          - Security
+          - Authentication
+          - SQL Injection
+          - Secrets
+          - Docker
+          - GitHub Actions
+          - Validation
+          - API Risks
+
+          Changed Files:
+          $changed_files
+          EOF
+          )
+
+          response=$(curl \
+            --silent \
+            --show-error \
+            --header "Authorization: Bearer $AI_API_KEY" \
+            --header "Content-Type: application/json" \
+            "$AI_API_URL" \
+            --data "$(jq -n \
+              --arg model "$AI_MODEL" \
+              --arg prompt "$prompt" \
+              '{
+                model: $model,
+                messages: [
+                  {
+                    role: "user",
+                    content: $prompt
+                  }
+                ]
+              }')")
+
+          report=$(echo "$response" | jq -r '.choices[0].message.content // "No AI review available."')
+
+          {
+            echo "report<<EOF"
+            echo "$report"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## AI Review"
+            echo
+            echo "$report"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      ##########################################################
+      # PR Comment
+      ##########################################################
+
+      - name: Comment Pull Request
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            ## CI Summary
+
+            **Commit**
+
+            `${{ github.sha }}`
+
+            ### Trivy
+
+            | Severity | Count |
+            |----------|------:|
+            | Critical | ${{ steps.pipeline-summary.outputs.critical }} |
+            | High | ${{ steps.pipeline-summary.outputs.high }} |
+            | Unfixed | ${{ steps.pipeline-summary.outputs.unfixed }} |
+
+            **SBOM Components**
+
+            ${{ steps.pipeline-summary.outputs.components }}
+
+            ---
+
+            ## AI Review
+
+            ${{ steps.ai-review.outputs.report }}
