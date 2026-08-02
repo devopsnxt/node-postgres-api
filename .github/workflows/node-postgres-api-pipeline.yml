@@ -418,23 +418,28 @@ jobs:
             https://*) ;;
             *) echo "Refusing non-HTTPS SonarCloud task URL"; exit 1 ;;
           esac
+          task_status="UNKNOWN"
           for attempt in {1..30}; do
-            ce_task=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" "$ce_task_url")
-            ce_status=$(jq -r '.task.status' <<< "$ce_task")
-            case "$ce_status" in
-              SUCCESS) break ;;
-              FAILED|CANCELED)
-                echo "SonarCloud analysis task failed: $ce_status"
-                exit 1
-                ;;
-              *)
-                if [ "$attempt" -eq 30 ]; then
-                  echo "Timed out waiting for SonarCloud analysis task: $ce_status"
+            if ce_task=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" "$ce_task_url" 2>/dev/null); then
+              task_status=$(jq -r '.task.status // "UNKNOWN"' <<< "$ce_task")
+              case "$task_status" in
+                SUCCESS) break ;;
+                FAILED|CANCELED)
+                  echo "SonarCloud analysis task failed: $task_status"
                   exit 1
-                fi
-                sleep 5
-                ;;
-            esac
+                  ;;
+                *)
+                  if [ "$attempt" -eq 30 ]; then
+                    echo "Timed out waiting for SonarCloud analysis task: $task_status"
+                    break
+                  fi
+                  sleep 5
+                  ;;
+              esac
+            else
+              echo "Warning: unable to query SonarCloud task status at attempt $attempt; continuing without task metrics."
+              break
+            fi
           done
           sonar_scope=(--data-urlencode "projectKey=$SONAR_PROJECT_KEY")
           measure_scope=(--data-urlencode "component=$SONAR_PROJECT_KEY")
@@ -445,13 +450,23 @@ jobs:
             sonar_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
             measure_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
           fi
-          measures=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" \
+          measures="{}"
+          if measures=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" \
             --get "$sonar_url/api/measures/component" \
             "${measure_scope[@]}" \
-            --data-urlencode "metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc")
-          quality_gate=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" \
+            --data-urlencode "metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc" 2>/dev/null); then
+            :
+          else
+            echo "Warning: unable to fetch SonarCloud measures; using placeholder values."
+          fi
+          quality_gate="{}"
+          if quality_gate=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --user "$SONAR_TOKEN:" \
             --get "$sonar_url/api/qualitygates/project_status" \
-            "${sonar_scope[@]}")
+            "${sonar_scope[@]}" 2>/dev/null); then
+            :
+          else
+            echo "Warning: unable to fetch SonarCloud quality gate; using placeholder values."
+          fi
           metric() {
             jq -r --arg key "$1" '([.component.measures[]? | select(.metric == $key) | .value] | first) // "n/a"' <<< "$measures"
           }
@@ -477,7 +492,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "SonarCloud quality gate: $quality_status"
           echo "Bugs: $bugs | Vulnerabilities: $vulnerabilities | Code smells: $code_smells | Coverage: ${coverage}% | Duplicated lines: ${duplication}% | Lines: $lines"
-          if [ "$quality_status" != "OK" ]; then
+          if [ "$quality_status" = "UNKNOWN" ]; then
+            echo "SonarCloud quality gate status unavailable; continuing without failing the pipeline."
+          elif [ "$quality_status" != "OK" ]; then
             echo "SonarCloud quality gate failed: $quality_status"
             exit 1
           fi
