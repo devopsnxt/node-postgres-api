@@ -32,6 +32,7 @@ jobs:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN || '' }}
       SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION || '' }}
       SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY || '' }}
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN || '' }}
 
     steps:
 
@@ -105,9 +106,9 @@ jobs:
       ##########################################################
 
       - name: Run Snyk Scan
-        if: ${{ secrets.SNYK_TOKEN != '' }}
+        if: ${{ env.SNYK_TOKEN != '' }}
         env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          SNYK_TOKEN: ${{ env.SNYK_TOKEN }}
         run: |
           npx snyk test --all-projects
       ##########################################################
