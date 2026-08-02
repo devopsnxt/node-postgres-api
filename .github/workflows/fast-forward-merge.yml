@@ -75,7 +75,7 @@ jobs:
           node-version: 24
 
       - name: Install Dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       ##########################################################
       # CodeQL
@@ -111,7 +111,7 @@ jobs:
         env:
           SNYK_TOKEN: ${{ env.SNYK_TOKEN }}
         run: |
-          npx snyk test --all-projects
+          npx snyk@1.1306.2 test --all-projects
 
       ##########################################################
       # Java
