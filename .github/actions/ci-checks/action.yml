@@ -1,0 +1,227 @@
+---
+name: "CI Checks"
+description: >
+  Shared CI pipeline: secret scanning, code quality, security scans,
+  Docker build, SBOM generation, and vulnerability analysis.
+
+# ────────────────────────────────────────────────────────────
+# Inputs
+# ────────────────────────────────────────────────────────────
+
+inputs:
+  github-token:
+    description: "GitHub token for API access and SARIF uploads"
+    required: true
+  sonar-token:
+    description: "SonarCloud authentication token"
+    required: false
+    default: ""
+  sonar-host-url:
+    description: "SonarCloud host URL"
+    required: false
+    default: "https://sonarcloud.io"
+  sonar-organization:
+    description: "SonarCloud organization key"
+    required: false
+    default: ""
+  sonar-project-key:
+    description: "SonarCloud project key"
+    required: false
+    default: ""
+  snyk-token:
+    description: "Snyk authentication token"
+    required: false
+    default: ""
+  docker-load:
+    description: "Load image into local Docker daemon (required for push)"
+    required: false
+    default: "false"
+  docker-tags:
+    description: "Docker image tags (newline-separated for multiple tags)"
+    required: true
+
+# ────────────────────────────────────────────────────────────
+# Outputs
+# ────────────────────────────────────────────────────────────
+
+outputs:
+  critical:
+    description: "Critical vulnerability count from Trivy"
+    value: ${{ steps.scan-summary.outputs.critical }}
+  high:
+    description: "High vulnerability count from Trivy"
+    value: ${{ steps.scan-summary.outputs.high }}
+  unfixed:
+    description: "Unfixed vulnerability count from Trivy"
+    value: ${{ steps.scan-summary.outputs.unfixed }}
+  components:
+    description: "SBOM component count"
+    value: ${{ steps.scan-summary.outputs.components }}
+
+# ────────────────────────────────────────────────────────────
+# Steps
+# ────────────────────────────────────────────────────────────
+
+runs:
+  using: "composite"
+  steps:
+
+    # ── Gitleaks ──────────────────────────────────────────────
+
+    - name: Scan for Secrets
+      uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Upload Gitleaks SARIF
+      if: always()
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: gitleaks.sarif
+        category: gitleaks
+      continue-on-error: true
+
+    # ── Node ──────────────────────────────────────────────────
+
+    - name: Setup Node
+      uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+      with:
+        node-version: 24
+
+    - name: Install Dependencies
+      shell: bash
+      run: npm ci --ignore-scripts
+
+    # ── CodeQL Init ───────────────────────────────────────────
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: javascript
+
+    # ── Lint & Tests ──────────────────────────────────────────
+
+    - name: Run Lint
+      shell: bash
+      run: npm run lint --if-present
+
+    - name: Run Tests
+      shell: bash
+      run: |
+        set -o pipefail
+        npm test --if-present 2>&1 | tee test-output.log
+
+    # ── Snyk ──────────────────────────────────────────────────
+
+    - name: Run Snyk
+      if: ${{ inputs.snyk-token != '' }}
+      shell: bash
+      env:
+        SNYK_TOKEN: ${{ inputs.snyk-token }}
+      run: npx --ignore-scripts snyk@1.1306.2 test --all-projects
+
+    # ── Java & SonarCloud ─────────────────────────────────────
+
+    - name: Setup Java 17
+      id: setup-java
+      uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+      with:
+        distribution: temurin
+        java-version: "17"
+
+    - name: SonarCloud Scan
+      if: ${{ inputs.sonar-token != '' }}
+      uses: SonarSource/sonarqube-scan-action@0303d6b62e310685c0e34d0b9cde218036885c4d # v5.0.0
+      env:
+        SONAR_SCANNER_JRE: ${{ steps.setup-java.outputs.java-home }}
+        SONAR_TOKEN: ${{ inputs.sonar-token }}
+      with:
+        args: >
+          -Dsonar.host.url=${{ inputs.sonar-host-url }}
+          -Dsonar.organization=${{ inputs.sonar-organization }}
+          -Dsonar.projectKey=${{ inputs.sonar-project-key }}
+          -Dsonar.qualitygate.wait=true
+
+    # ── CodeQL Analyze ────────────────────────────────────────
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4
+
+    # ── Docker Build ──────────────────────────────────────────
+
+    - name: Build Docker Image
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+      with:
+        context: .
+        file: ./Dockerfile
+        push: false
+        load: ${{ inputs.docker-load }}
+        tags: ${{ inputs.docker-tags }}
+
+    # ── SBOM ──────────────────────────────────────────────────
+
+    - name: Generate SBOM
+      uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+      with:
+        path: .
+        format: cyclonedx-json
+        output-file: image-sbom.json
+
+    # ── Trivy ─────────────────────────────────────────────────
+
+    - name: Trivy Filesystem Scan (JSON)
+      uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+      with:
+        scan-type: fs
+        scan-ref: .
+        format: json
+        output: image-scan.json
+        severity: HIGH,CRITICAL
+        ignore-unfixed: true
+
+    - name: Trivy Filesystem Scan (SARIF)
+      uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+      with:
+        scan-type: fs
+        scan-ref: .
+        format: sarif
+        output: trivy-results.sarif
+        severity: HIGH,CRITICAL
+        ignore-unfixed: true
+
+    - name: Upload Trivy SARIF
+      if: always()
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: trivy-results.sarif
+        category: trivy
+      continue-on-error: true
+
+    # ── Artifacts ─────────────────────────────────────────────
+
+    - name: Upload Scan Artifacts
+      if: always()
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      with:
+        name: image-scan-artifacts
+        path: |
+          image-scan.json
+          image-sbom.json
+          trivy-results.sarif
+
+    # ── Scan Summary ──────────────────────────────────────────
+
+    - name: Compute Scan Summary
+      id: scan-summary
+      if: always()
+      shell: bash
+      run: |
+        critical=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' image-scan.json 2>/dev/null || echo "0")
+        high=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' image-scan.json 2>/dev/null || echo "0")
+        unfixed=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Status!="fixed")] | length' image-scan.json 2>/dev/null || echo "0")
+        components=$(jq '.components | length' image-sbom.json 2>/dev/null || echo "0")
+
+        echo "critical=$critical" >> "$GITHUB_OUTPUT"
+        echo "high=$high" >> "$GITHUB_OUTPUT"
+        echo "unfixed=$unfixed" >> "$GITHUB_OUTPUT"
+        echo "components=$components" >> "$GITHUB_OUTPUT"
