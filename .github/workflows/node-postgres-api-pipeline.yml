@@ -452,27 +452,44 @@ jobs:
             sonar_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
             measure_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
           fi
+          auth_header="Authorization: Basic $(printf '%s:' "$SONAR_TOKEN" | base64 | tr -d '\n')"
           measures="{}"
-          if ! measures=$(curl --proto '=https' --tlsv1.2 --silent --show-error \
-            --header "Authorization: Basic $(printf '%s:' "$SONAR_TOKEN" | base64 -w 0)" \
-            --get "$sonar_url/api/measures/component" \
-            "${measure_scope[@]}" \
-            --data-urlencode "metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc" 2>/dev/null); then
-            echo "Warning: unable to fetch SonarCloud measures; using placeholder values."
-          fi
+          for attempt in {1..10}; do
+            if measures=$(curl --proto '=https' --tlsv1.2 --silent --show-error \
+              --header "$auth_header" \
+              --get "$sonar_url/api/measures/component" \
+              "${measure_scope[@]}" \
+              --data-urlencode "metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc" 2>/dev/null); then
+              if jq -e '.component' <<< "$measures" >/dev/null 2>&1; then
+                break
+              fi
+            fi
+            if [ "$attempt" -eq 10 ]; then
+              echo "Warning: unable to fetch SonarCloud measures after retries; using placeholder values."
+              measures="{}"
+              break
+            fi
+            echo "Waiting for SonarCloud measures to become available (attempt $attempt/10)..."
+            sleep 10
+          done
           quality_gate="{}"
-          if ! quality_gate=$(curl --proto '=https' --tlsv1.2 --silent --show-error \
-            --header "Authorization: Basic $(printf '%s:' "$SONAR_TOKEN" | base64 -w 0)" \
-            --get "$sonar_url/api/qualitygates/project_status" \
-            "${sonar_scope[@]}" 2>/dev/null); then
-            echo "Warning: unable to fetch SonarCloud quality gate; using placeholder values."
-          fi
-          if [ -z "$measures" ]; then
-            measures="{}"
-          fi
-          if [ -z "$quality_gate" ]; then
-            quality_gate="{}"
-          fi
+          for attempt in {1..10}; do
+            if quality_gate=$(curl --proto '=https' --tlsv1.2 --silent --show-error \
+              --header "$auth_header" \
+              --get "$sonar_url/api/qualitygates/project_status" \
+              "${sonar_scope[@]}" 2>/dev/null); then
+              if jq -e '.projectStatus' <<< "$quality_gate" >/dev/null 2>&1; then
+                break
+              fi
+            fi
+            if [ "$attempt" -eq 10 ]; then
+              echo "Warning: unable to fetch SonarCloud quality gate after retries; using placeholder values."
+              quality_gate="{}"
+              break
+            fi
+            echo "Waiting for SonarCloud quality gate to become available (attempt $attempt/10)..."
+            sleep 10
+          done
           metric() {
             jq -r --arg key "$1" '([.component.measures[]? | select(.metric == $key) | .value] | first) // "n/a"' <<< "$measures"
           }
