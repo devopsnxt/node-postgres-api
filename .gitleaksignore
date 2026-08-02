@@ -7,3 +7,4 @@
 6e087760c31d88331e7fa0c9b87f850f44ae0560:.github/workflows/node-postgres-api-pipeline.yml:curl-auth-user:419
 6e087760c31d88331e7fa0c9b87f850f44ae0560:.github/workflows/node-postgres-api-pipeline.yml:curl-auth-user:445
 6e087760c31d88331e7fa0c9b87f850f44ae0560:.github/workflows/node-postgres-api-pipeline.yml:curl-auth-user:449
+6e087760c31d88331e7fa0c9b87f850f44ae0560:.github/workflows/node-postgres-api-pipeline.yml:curl-auth-user:*
