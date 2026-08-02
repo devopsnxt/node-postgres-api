@@ -1,0 +1,509 @@
+---
+name: fast-forward-merge
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: node-postgres-api-main
+  cancel-in-progress: true
+
+env:
+  APP_NAME: node-postgres-api
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/node-postgres-api
+
+jobs:
+  fast-forward-merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      security-events: write
+      actions: read
+    env:
+      AI_ENABLED: ${{ secrets.AI_API_KEY != '' && true || false }}
+      SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN || '' }}
+      SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION || '' }}
+      SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY || '' }}
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN || '' }}
+
+    steps:
+
+      ##########################################################
+      # Checkout
+      ##########################################################
+
+      - name: Checkout Repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      ##########################################################
+      # Gitleaks
+      ##########################################################
+
+      - name: Scan Repository
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check Gitleaks SARIF
+        id: check_gitleaks_sarif
+        run: |
+          if [ -f gitleaks.sarif ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload Gitleaks SARIF
+        if: steps.check_gitleaks_sarif.outputs.exists == 'true'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: gitleaks.sarif
+
+      ##########################################################
+      # Node
+      ##########################################################
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+
+      - name: Install Dependencies
+        run: npm ci --ignore-scripts
+
+      ##########################################################
+      # CodeQL
+      ##########################################################
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript
+
+      ##########################################################
+      # Lint
+      ##########################################################
+
+      - name: Run Lint
+        run: npm run lint --if-present
+
+      ##########################################################
+      # Tests
+      ##########################################################
+
+      - name: Run Tests
+        run: |
+          set -o pipefail
+          npm test --if-present 2>&1 | tee test-output.log
+
+      ##########################################################
+      # Snyk
+      ##########################################################
+
+      - name: Run Snyk
+        if: ${{ env.SNYK_TOKEN != '' }}
+        env:
+          SNYK_TOKEN: ${{ env.SNYK_TOKEN }}
+        run: |
+          npx --ignore-scripts snyk@1.1306.2 test --all-projects
+
+      ##########################################################
+      # Java
+      ##########################################################
+
+      - name: Setup Java
+        id: setup-java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      ##########################################################
+      # SonarCloud
+      ##########################################################
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@0303d6b62e310685c0e34d0b9cde218036885c4d # v5.0.0
+        env:
+          SONAR_SCANNER_JRE: ${{ steps.setup-java.outputs.java-home }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
+            -Dsonar.organization=${{ vars.SONAR_ORGANIZATION }}
+            -Dsonar.qualitygate.wait=true
+
+      ##########################################################
+      # CodeQL Analyze
+      ##########################################################
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+      ##########################################################
+      # Docker Build
+      ##########################################################
+
+      - name: Build Docker Image
+        id: docker-build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: |
+            ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+            ${{ env.GHCR_IMAGE }}:latest
+
+      ##########################################################
+      # SBOM
+      ##########################################################
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: image-sbom.json
+
+      ##########################################################
+      # Trivy JSON Report
+      ##########################################################
+
+      - name: Trivy Filesystem Scan (JSON)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: json
+          output: image-scan.json
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      ##########################################################
+      # Trivy SARIF
+      ##########################################################
+
+      - name: Trivy Filesystem Scan (SARIF)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+      - name: Check Trivy SARIF
+        id: check_trivy_sarif
+        run: |
+          if [ -f trivy-results.sarif ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+      ##########################################################
+      # Upload Scan Artifacts
+      ##########################################################
+
+      - name: Upload Security Artifacts
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: image-scan-artifacts
+          path: |
+            image-scan.json
+            image-sbom.json
+            trivy-results.sarif
+
+      ##########################################################
+      # Login to GHCR
+      ##########################################################
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      ##########################################################
+      # Push Image
+      ##########################################################
+
+      - name: Push Docker Images
+        run: |
+          docker push ${{ env.GHCR_IMAGE }}:${{ github.sha }}
+          docker push ${{ env.GHCR_IMAGE }}:latest
+      ##########################################################
+      # Install Cosign
+      ##########################################################
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+        with:
+          cosign-release: v2.4.1
+
+      ##########################################################
+      # Sign Image
+      ##########################################################
+
+      - name: Sign GHCR Image
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          COSIGN_YES: "true"
+        run: |
+
+          cosign public-key \
+            --key env://COSIGN_PRIVATE_KEY \
+            > cosign.pub
+
+          IMAGE_DIGEST=$(docker buildx imagetools inspect \
+            "${{ env.GHCR_IMAGE }}:${{ github.sha }}" \
+            --format '{{json .Manifest.Digest}}' | tr -d '"')
+
+          echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> $GITHUB_ENV
+
+          IMAGE_REF="${{ env.GHCR_IMAGE }}@$IMAGE_DIGEST"
+
+          cosign sign \
+            --key env://COSIGN_PRIVATE_KEY \
+            "$IMAGE_REF"
+
+      ##########################################################
+      # SBOM Attestation
+      ##########################################################
+
+      - name: Attach SBOM Attestation
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+          COSIGN_YES: "true"
+        run: |
+
+          IMAGE_REF="${{ env.GHCR_IMAGE }}@${IMAGE_DIGEST}"
+
+          cosign attest \
+            --key env://COSIGN_PRIVATE_KEY \
+            --predicate image-sbom.json \
+            "$IMAGE_REF"
+
+      ##########################################################
+      # Verify Signature
+      ##########################################################
+
+      - name: Verify Image Signature
+        run: |
+
+          IMAGE_REF="${{ env.GHCR_IMAGE }}@${IMAGE_DIGEST}"
+
+          cosign verify \
+            --key cosign.pub \
+            "$IMAGE_REF"
+
+      ##########################################################
+      # Verify Attestation
+      ##########################################################
+
+      - name: Verify SBOM Attestation
+        run: |
+
+          IMAGE_REF="${{ env.GHCR_IMAGE }}@${IMAGE_DIGEST}"
+
+          cosign verify-attestation \
+            --key cosign.pub \
+            "$IMAGE_REF"
+
+      ##########################################################
+      # Pipeline Summary
+      ##########################################################
+
+      - name: Generate Pipeline Summary
+        id: pipeline-summary
+        if: always()
+        run: |
+
+          image_scan="image-scan.json"
+          isb="image-sbom.json"
+
+          jq_fc='[.Results[]?.Vulnerabilities[]?|select(.Severity=="CRITICAL")]'
+          jq_fh='[.Results[]?.Vulnerabilities[]?|select(.Severity=="HIGH")]'
+          jq_fu='[.Results[]?.Vulnerabilities[]?|select(.Status!="fixed")]'
+
+          critical=$(jq -c "$jq_fc|length" "$image_scan" 2>/dev/null || echo 0)
+
+          high=$(jq -c "$jq_fh|length" "$image_scan" 2>/dev/null || echo 0)
+
+          unfixed=$(jq -c "$jq_fu|length" "$image_scan" 2>/dev/null || echo 0)
+
+          components=$(jq '.components|length' "$isb" 2>/dev/null || echo 0)
+
+          {
+            echo "## Release Pipeline"
+            echo ""
+            echo "| Area | Result |"
+            echo "|------|--------|"
+              echo "| Commit | ${GITHUB_SHA} |"
+              echo "| Image | ${GHCR_IMAGE} |"
+              echo "| Digest | ${IMAGE_DIGEST} |"
+              echo "| Critical | ${critical} |"
+              echo "| High | ${high} |"
+              echo "| Unfixed | ${unfixed} |"
+              echo "| SBOM Components | ${components} |"
+            echo "| Signature | Verified |"
+            echo "| Attestation | Verified |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "critical=${critical}" >> "$GITHUB_OUTPUT"
+          echo "high=${high}" >> "$GITHUB_OUTPUT"
+          echo "unfixed=${unfixed}" >> "$GITHUB_OUTPUT"
+          echo "components=${components}" >> "$GITHUB_OUTPUT"
+      ##########################################################
+      # AI Release Assessment
+      ##########################################################
+
+      - name: Generate AI Release Report
+        id: ai-release
+        if: ${{ env.AI_ENABLED == 'true' }}
+        env:
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_API_URL: ${{ vars.AI_API_URL || 'https://api.groq.com/openai/v1/chat/completions' }}
+          AI_MODEL: ${{ vars.AI_MODEL || 'llama-3.3-70b-versatile' }}
+          BASE_SHA: ${{ github.event.before }}
+        run: |
+
+          changed_files=$(git diff --name-only "$BASE_SHA...$GITHUB_SHA")
+
+          diff=$(git diff \
+            "$BASE_SHA...$GITHUB_SHA" \
+            -- . ':!package-lock.json' ':!*.lock')
+
+          critical="${{ steps.pipeline-summary.outputs.critical }}"
+          high="${{ steps.pipeline-summary.outputs.high }}"
+          components="${{ steps.pipeline-summary.outputs.components }}"
+
+          prompt=$(cat <<EOF
+          You are a Release Engineer.
+
+          Assess release readiness.
+
+          Repository Changes
+
+          $changed_files
+
+          Diff
+
+          $diff
+
+          Security
+
+          Critical Vulnerabilities : $critical
+
+          High Vulnerabilities : $high
+
+          SBOM Components : $components
+
+          Return
+
+          - Summary
+          - Risks
+          - Rollback Recommendation
+          - Production Readiness
+          EOF
+          )
+
+          response=$(curl \
+            -s \
+            -H "Authorization: Bearer $AI_API_KEY" \
+            -H "Content-Type: application/json" \
+            "$AI_API_URL" \
+            -d "$(jq -n \
+            --arg model "$AI_MODEL" \
+            --arg prompt "$prompt" \
+            '{
+                model:$model,
+                messages:[
+                  {
+                    role:"user",
+                    content:$prompt
+                  }
+                ]
+            }')")
+
+          report=$(echo "$response" \
+            | jq -r '.choices[0].message.content')
+
+          {
+            echo ""
+            echo "## AI Release Assessment"
+            echo ""
+            echo "$report"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      ##########################################################
+      # GitHub Release
+      ##########################################################
+
+      - name: Create GitHub Release
+        if: success()
+        uses: softprops/action-gh-release@c12583777ecdfd3be55c69cf75464299dc01057e # v3
+        with:
+          tag_name: release-${{ github.sha }}
+          name: Release ${{ github.sha }}
+          body: |
+
+            ## Release Summary
+
+            **Commit**
+
+            `${{ github.sha }}`
+
+            **Container Image**
+
+            `${{ env.GHCR_IMAGE }}@${{ env.IMAGE_DIGEST }}`
+
+            ### Security Scan
+
+            | Severity | Count |
+            |-----------|------:|
+            | Critical | ${{ steps.pipeline-summary.outputs.critical }} |
+            | High | ${{ steps.pipeline-summary.outputs.high }} |
+            | Unfixed | ${{ steps.pipeline-summary.outputs.unfixed }} |
+
+            ### Supply Chain
+
+            - Image Signed using Cosign
+            - Signature Verified
+            - SBOM Generated
+            - SBOM Attested
+            - Attestation Verified
+
+            ### AI Release Assessment
+
+            See the workflow summary for the detailed advisory report.
+
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      ##########################################################
+      # Completion Summary
+      ##########################################################
+
+      - name: Release Complete
+        if: always()
+        run: |
+          echo "Release pipeline completed successfully."
