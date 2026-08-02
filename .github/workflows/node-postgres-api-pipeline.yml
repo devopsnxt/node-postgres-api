@@ -409,61 +409,94 @@ jobs:
           set -euo pipefail
           sonar_url="${SONAR_HOST_URL:-https://sonarcloud.io}"
           echo "Using Sonar URL: $sonar_url"
+
+          # ✅ FIX: Validate SONAR_PROJECT_KEY is set early
+          if [ -z "${SONAR_PROJECT_KEY:-}" ]; then
+            echo "ERROR: SONAR_PROJECT_KEY is not set. Configure it in your repository variables."
+            exit 1
+          fi
+          echo "Project key: $SONAR_PROJECT_KEY"
+          echo "Branch: ${SONAR_BRANCH:-<none>} | PR: ${SONAR_PULL_REQUEST:-<none>}"
+
           report_file=".scannerwork/report-task.txt"
-          test -f "$report_file"
+          test -f "$report_file" || { echo "ERROR: $report_file not found. Did the scanner step run?"; exit 1; }
+
           ce_task_url=$(sed -n 's/^ceTaskUrl=//p' "$report_file")
           echo "Task URL: $ce_task_url"
           test -n "$ce_task_url"
+
           case "$ce_task_url" in
             https://*) ;;
             *) echo "Refusing non-HTTPS SonarCloud task URL"; exit 1 ;;
           esac
+
+          # ✅ FIX: Use consistent base64 encoding (no -w flag, use tr instead, works on both Linux/macOS)
+          sonar_auth_b64="$(printf '%s:' "$SONAR_TOKEN" | base64 | tr -d '\n')"
+
+          # ─── Wait for CE task to complete ──────────────────────────────────────
           task_status="UNKNOWN"
-          for attempt in {1..30}; do
-            if ce_task=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
-              --header "Authorization: Basic $(printf '%s:' "$SONAR_TOKEN" | base64 -w 0)" \
-              "$ce_task_url" 2>/dev/null); then
-              task_status=$(jq -r '.task.status // "UNKNOWN"' <<< "$ce_task")
-              case "$task_status" in
-                SUCCESS) break ;;
-                FAILED|CANCELED)
-                  echo "SonarCloud analysis task failed: $task_status"
-                  exit 1
-                  ;;
-                *)
-                  if [ "$attempt" -eq 30 ]; then
-                    echo "Timed out waiting for SonarCloud analysis task: $task_status"
-                    break
-                  fi
-                  sleep 5
-                  ;;
-              esac
-            else
-              echo "Warning: unable to query SonarCloud task status at attempt $attempt; continuing without task metrics."
+          for attempt in $(seq 1 30); do
+            response=$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+              --header "Authorization: Basic $sonar_auth_b64" \
+              "$ce_task_url" 2>&1) || {
+              echo "Warning: unable to query SonarCloud task status at attempt $attempt; continuing."
               break
-            fi
+            }
+            task_status=$(jq -r '.task.status // "UNKNOWN"' <<< "$response")
+            echo "CE task status (attempt $attempt/30): $task_status"
+            case "$task_status" in
+              SUCCESS) break ;;
+              FAILED|CANCELED)
+                echo "SonarCloud analysis task failed: $task_status"
+                echo "Response: $response"
+                exit 1
+                ;;
+              *)
+                if [ "$attempt" -eq 30 ]; then
+                  echo "Timed out waiting for SonarCloud analysis task: $task_status"
+                  break
+                fi
+                sleep 5
+                ;;
+            esac
           done
+
+          # ─── Build scope parameters ────────────────────────────────────────────
           sonar_scope=(--data-urlencode "projectKey=$SONAR_PROJECT_KEY")
           measure_scope=(--data-urlencode "component=$SONAR_PROJECT_KEY")
-          if [ -n "$SONAR_PULL_REQUEST" ]; then
+
+          if [ -n "${SONAR_PULL_REQUEST:-}" ]; then
             sonar_scope+=(--data-urlencode "pullRequest=$SONAR_PULL_REQUEST")
             measure_scope+=(--data-urlencode "pullRequest=$SONAR_PULL_REQUEST")
+            echo "Scope: Pull Request #$SONAR_PULL_REQUEST"
           else
             sonar_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
             measure_scope+=(--data-urlencode "branch=$SONAR_BRANCH")
+            echo "Scope: Branch $SONAR_BRANCH"
           fi
-          auth_header="Authorization: Basic $(printf '%s:' "$SONAR_TOKEN" | base64 | tr -d '\n')"
+
+          # ─── Fetch measures with retries ───────────────────────────────────────
           measures="{}"
-          for attempt in {1..10}; do
-            if measures=$(curl --proto '=https' --tlsv1.2 --silent --show-error \
-              --header "$auth_header" \
+          for attempt in $(seq 1 10); do
+            # ✅ FIX: Capture stderr separately; log actual response on failure
+            response=$(curl --proto '=https' --tlsv1.2 --silent --show-error \
+              --write-out "\n__HTTP_STATUS__:%{http_code}" \
+              --header "Authorization: Basic $sonar_auth_b64" \
               --get "$sonar_url/api/measures/component" \
               "${measure_scope[@]}" \
-              --data-urlencode "metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc" 2>/dev/null); then
-              if jq -e '.component' <<< "$measures" >/dev/null 2>&1; then
-                break
-              fi
+              --data-urlencode "metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density,ncloc" 2>&1) || true
+
+            http_status=$(echo "$response" | grep -o '__HTTP_STATUS__:[0-9]*' | cut -d: -f2)
+            body=$(echo "$response" | sed 's/__HTTP_STATUS__:[0-9]*//')
+
+            if [ "$http_status" = "200" ] && jq -e '.component' <<< "$body" >/dev/null 2>&1; then
+              measures="$body"
+              echo "Measures fetched successfully."
+              break
             fi
+
+            echo "Attempt $attempt/10 failed (HTTP $http_status). Response: $body"
+
             if [ "$attempt" -eq 10 ]; then
               echo "Warning: unable to fetch SonarCloud measures after retries; using placeholder values."
               measures="{}"
@@ -472,16 +505,27 @@ jobs:
             echo "Waiting for SonarCloud measures to become available (attempt $attempt/10)..."
             sleep 10
           done
+
+          # ─── Fetch quality gate with retries ──────────────────────────────────
           quality_gate="{}"
-          for attempt in {1..10}; do
-            if quality_gate=$(curl --proto '=https' --tlsv1.2 --silent --show-error \
-              --header "$auth_header" \
+          for attempt in $(seq 1 10); do
+            response=$(curl --proto '=https' --tlsv1.2 --silent --show-error \
+              --write-out "\n__HTTP_STATUS__:%{http_code}" \
+              --header "Authorization: Basic $sonar_auth_b64" \
               --get "$sonar_url/api/qualitygates/project_status" \
-              "${sonar_scope[@]}" 2>/dev/null); then
-              if jq -e '.projectStatus' <<< "$quality_gate" >/dev/null 2>&1; then
-                break
-              fi
+              "${sonar_scope[@]}" 2>&1) || true
+
+            http_status=$(echo "$response" | grep -o '__HTTP_STATUS__:[0-9]*' | cut -d: -f2)
+            body=$(echo "$response" | sed 's/__HTTP_STATUS__:[0-9]*//')
+
+            if [ "$http_status" = "200" ] && jq -e '.projectStatus' <<< "$body" >/dev/null 2>&1; then
+              quality_gate="$body"
+              echo "Quality gate fetched successfully."
+              break
             fi
+
+            echo "Attempt $attempt/10 failed (HTTP $http_status). Response: $body"
+
             if [ "$attempt" -eq 10 ]; then
               echo "Warning: unable to fetch SonarCloud quality gate after retries; using placeholder values."
               quality_gate="{}"
@@ -490,9 +534,14 @@ jobs:
             echo "Waiting for SonarCloud quality gate to become available (attempt $attempt/10)..."
             sleep 10
           done
+
+          # ─── Extract and report metrics ────────────────────────────────────────
           metric() {
-            jq -r --arg key "$1" '([.component.measures[]? | select(.metric == $key) | .value] | first) // "n/a"' <<< "$measures"
+            jq -r --arg key "$1" \
+              '([.component.measures[]? | select(.metric == $key) | .value] | first) // "n/a"' \
+              <<< "$measures"
           }
+
           quality_status=$(jq -r '.projectStatus.status // "UNKNOWN"' <<< "$quality_gate")
           bugs=$(metric bugs)
           vulnerabilities=$(metric vulnerabilities)
@@ -500,6 +549,7 @@ jobs:
           coverage=$(metric coverage)
           duplication=$(metric duplicated_lines_density)
           lines=$(metric ncloc)
+
           {
             echo "## SonarCloud statistics"
             echo ""
@@ -513,14 +563,17 @@ jobs:
             echo "| Duplicated lines | ${duplication}% |"
             echo "| Lines of code | $lines |"
           } >> "$GITHUB_STEP_SUMMARY"
+
           echo "SonarCloud quality gate: $quality_status"
           echo "Bugs: $bugs | Vulnerabilities: $vulnerabilities | Code smells: $code_smells | Coverage: ${coverage}% | Duplicated lines: ${duplication}% | Lines: $lines"
+
           if [ "$quality_status" = "UNKNOWN" ]; then
             echo "SonarCloud quality gate status unavailable; continuing without failing the pipeline."
           elif [ "$quality_status" != "OK" ]; then
             echo "SonarCloud quality gate failed: $quality_status"
             exit 1
           fi
+
 
       - name: Build Docker image for release
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
