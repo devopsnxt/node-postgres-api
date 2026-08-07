@@ -14,8 +14,16 @@ jobs:
     permissions:
       contents: write
     steps:
+      
+      # ── Checkout ──────────────────────────────────────────────
+      #   Clones the repository so the pipeline can access the code.
+
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      # ── Validate Version Format ───────────────────────────────
+      #   Ensures the user input matches Semantic Versioning (vX.Y.Z)
+      #   to keep releases uniform and predictable.
 
       - name: Validate Version Format
         run: |
@@ -24,12 +32,20 @@ jobs:
             exit 1
           fi
 
+      # ── Create and Push Tag ───────────────────────────────────
+      #   Configures the git user as the GitHub Actions bot, creates
+      #   an immutable git tag for this release, and pushes it to origin.
+
       - name: Create and Push Tag
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag ${{ github.event.inputs.version }}
           git push origin ${{ github.event.inputs.version }}
+
+      # ── Create Release ────────────────────────────────────────
+      #   Calls Release Drafter to convert the drafted release notes
+      #   into a finalized, published GitHub Release attached to the tag.
 
       - name: Create Release
         uses: release-drafter/release-drafter@6a93d829887aa2e0748befe2e808c66c0ec6e4c7 # v6

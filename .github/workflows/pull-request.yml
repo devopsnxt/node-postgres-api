@@ -32,14 +32,17 @@ jobs:
 
     steps:
 
+      # ── Checkout ──────────────────────────────────────────────
+      #   Clones the repository so the pipeline can access the code.
+
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
 
-      ##########################################################
-      # Shared CI Checks
-      ##########################################################
+      # ── Shared CI Checks ──────────────────────────────────────
+      #   Calls the reusable composite action to run linting, tests,
+      #   CodeQL, SonarCloud, Docker build, SBOM, and Trivy scans.
 
       - name: CI Checks
         id: ci
@@ -53,9 +56,9 @@ jobs:
           snyk-token: ${{ secrets.SNYK_TOKEN }}
           docker-tags: ${{ env.GHCR_IMAGE }}:${{ github.sha }}
 
-      ##########################################################
-      # Gitleaks Artifact (PR-only)
-      ##########################################################
+      # ── Gitleaks Artifact (PR-only) ───────────────────────────
+      #   Uploads the secret scanning SARIF report as a workflow
+      #   artifact for manual review if needed.
 
       - name: Upload Gitleaks Artifact
         if: always()
@@ -65,9 +68,9 @@ jobs:
           path: gitleaks.sarif
           if-no-files-found: ignore
 
-      ##########################################################
-      # Pipeline Summary
-      ##########################################################
+      # ── Pipeline Summary ──────────────────────────────────────
+      #   Writes a high-level markdown summary of the CI findings
+      #   directly to the GitHub Actions workflow summary page.
 
       - name: Generate Pipeline Summary
         if: always()
@@ -84,9 +87,9 @@ jobs:
             echo "| SBOM Components | ${{ steps.ci.outputs.components }} |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      ##########################################################
-      # AI Review
-      ##########################################################
+      # ── AI Review ─────────────────────────────────────────────
+      #   Uses an AI model (if enabled) to review the exact code
+      #   changes in this PR for logic bugs and security flaws.
 
       - name: AI Review
         id: ai-review
@@ -153,9 +156,9 @@ jobs:
             echo "$report"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      ##########################################################
-      # PR Comment
-      ##########################################################
+      # ── PR Comment ────────────────────────────────────────────
+      #   Posts the scan metrics and AI review report as a comment
+      #   directly on the Pull Request thread.
 
       - name: Comment Pull Request
         if: github.event.pull_request.head.repo.full_name == github.repository
@@ -188,9 +191,9 @@ jobs:
 
             ${{ steps.ai-review.outputs.report }}
 
-      ##########################################################
-      # Autolabel PR
-      ##########################################################
+      # ── Autolabel PR ──────────────────────────────────────────
+      #   Automatically adds labels to the PR based on the title
+      #   or branch name, which helps Release Drafter categorize it.
 
       - name: Autolabel Pull Request
         uses: release-drafter/release-drafter@6a93d829887aa2e0748befe2e808c66c0ec6e4c7 # v6

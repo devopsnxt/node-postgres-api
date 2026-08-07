@@ -67,6 +67,8 @@ runs:
   steps:
 
     # ── Gitleaks ──────────────────────────────────────────────
+    #   Scans your repository for accidentally committed secrets,
+    #   passwords, or API keys.
 
     - name: Scan for Secrets
       uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
@@ -82,6 +84,7 @@ runs:
       continue-on-error: true
 
     # ── Node ──────────────────────────────────────────────────
+    #   Sets up the Node.js environment and installs dependencies.
 
     - name: Setup Node
       uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -93,6 +96,8 @@ runs:
       run: npm ci --ignore-scripts
 
     # ── CodeQL Init ───────────────────────────────────────────
+    #   Initializes GitHub's native Static Application Security
+    #   Testing (SAST) tool to scan your custom code for flaws.
 
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v4
@@ -100,6 +105,7 @@ runs:
         languages: javascript
 
     # ── Lint & Tests ──────────────────────────────────────────
+    #   Runs code formatting and unit tests to ensure stability.
 
     - name: Run Lint
       shell: bash
@@ -112,6 +118,7 @@ runs:
         npm test --if-present 2>&1 | tee test-output.log
 
     # ── Snyk ──────────────────────────────────────────────────
+    #   Finding vulnerabilities in other people's code (your dependencies).
 
     - name: Run Snyk
       if: ${{ inputs.snyk-token != '' }}
@@ -121,6 +128,8 @@ runs:
       run: npx --ignore-scripts snyk@1.1306.2 test --all-projects
 
     # ── Java & SonarCloud ─────────────────────────────────────
+    #   Runs SonarCloud to analyze code quality, code smells,
+    #   and test coverage metrics. Requires Java 17 to run.
 
     - name: Setup Java 17
       id: setup-java
@@ -143,11 +152,14 @@ runs:
           -Dsonar.qualitygate.wait=true
 
     # ── CodeQL Analyze ────────────────────────────────────────
+    #   Completes the CodeQL SAST scan and uploads results.
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4
 
     # ── Docker Build ──────────────────────────────────────────
+    #   Builds the Docker container image so it can be scanned
+    #   and eventually pushed to the registry.
 
     - name: Build Docker Image
       uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
@@ -159,6 +171,8 @@ runs:
         tags: ${{ inputs.docker-tags }}
 
     # ── SBOM ──────────────────────────────────────────────────
+    #   Generates a Software Bill of Materials (SBOM), a detailed
+    #   inventory of everything inside the final Docker image.
 
     - name: Generate SBOM
       uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
@@ -168,6 +182,8 @@ runs:
         output-file: image-sbom.json
 
     # ── Trivy ─────────────────────────────────────────────────
+    #   Scans the built Docker image for vulnerabilities in OS
+    #   packages (like Alpine/Debian flaws).
 
     - name: Trivy Filesystem Scan (JSON)
       uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
@@ -198,6 +214,8 @@ runs:
       continue-on-error: true
 
     # ── Artifacts ─────────────────────────────────────────────
+    #   Uploads the raw JSON/SARIF scan reports as pipeline
+    #   artifacts so they can be downloaded and reviewed.
 
     - name: Upload Scan Artifacts
       if: always()
@@ -210,6 +228,8 @@ runs:
           trivy-results.sarif
 
     # ── Scan Summary ──────────────────────────────────────────
+    #   Parses the raw JSON reports to extract the exact number
+    #   of vulnerabilities found to display in the PR comment.
 
     - name: Compute Scan Summary
       id: scan-summary
