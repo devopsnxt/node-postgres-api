@@ -5,7 +5,8 @@
   "description": "Express REST API using node-postgres to manage users in PostgreSQL.",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test"
   },
   "dependencies": {
     "dotenv": "^16.3.1",

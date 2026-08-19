@@ -66,6 +66,41 @@ Response:
 
 - `200 OK` with an array of user objects
 
+### POST /contact
+
+Create a new contact.
+
+- URL: `http://localhost:3000/contact`
+- Method: `POST`
+- Headers: `Content-Type: application/json`
+- Body example:
+
+```json
+{
+  "name": "John Doe",
+  "email": "john@example.com",
+  "phone": "+1-555-0123",
+  "message": "Contact message text"
+}
+```
+
+Response:
+
+- `201 Created` with the created contact object
+- `400 Bad Request` when `name` or `email` is missing
+- `409 Conflict` when the email already exists
+
+### GET /contact
+
+Retrieve all contacts.
+
+- URL: `http://localhost:3000/contact`
+- Method: `GET`
+
+Response:
+
+- `200 OK` with an array of contact objects
+
 ## Postman Testing Instructions
 
 1. Open Postman.
