@@ -27,14 +27,17 @@ jobs:
 
     steps:
 
+      # ── Checkout ──────────────────────────────────────────────
+      #   Clones the repository so the pipeline can access the code.
+
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
 
-      ##########################################################
-      # Shared CI Checks
-      ##########################################################
+      # ── Shared CI Checks ──────────────────────────────────────
+      #   Calls the reusable composite action to run all linting,
+      #   tests, and scans. Also loads the Docker image locally.
 
       - name: CI Checks
         id: ci
@@ -51,9 +54,9 @@ jobs:
             ${{ env.GHCR_IMAGE }}:${{ github.sha }}
             ${{ env.GHCR_IMAGE }}:latest
 
-      ##########################################################
-      # GHCR Login & Push
-      ##########################################################
+      # ── GHCR Login & Push ─────────────────────────────────────
+      #   Authenticates to GitHub Container Registry and pushes
+      #   the built Docker image with both SHA and 'latest' tags.
 
       - name: Login to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
@@ -67,9 +70,9 @@ jobs:
           docker push ${{ env.GHCR_IMAGE }}:${{ github.sha }}
           docker push ${{ env.GHCR_IMAGE }}:latest
 
-      ##########################################################
-      # Cosign Sign & Attest
-      ##########################################################
+      # ── Cosign Sign & Attest ──────────────────────────────────
+      #   Cryptographically signs the Docker image and attaches the
+      #   SBOM to guarantee its authenticity and integrity.
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
@@ -123,9 +126,9 @@ jobs:
             --key cosign.pub \
             "$IMAGE_REF"
 
-      ##########################################################
-      # Pipeline Summary
-      ##########################################################
+      # ── Pipeline Summary ──────────────────────────────────────
+      #   Writes a high-level markdown summary of the release build
+      #   directly to the GitHub Actions workflow summary page.
 
       - name: Generate Pipeline Summary
         if: always()
@@ -146,9 +149,9 @@ jobs:
             echo "| Attestation | Verified |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      ##########################################################
-      # AI Release Assessment
-      ##########################################################
+      # ── AI Release Assessment ─────────────────────────────────
+      #   Uses AI to analyze all commits pushed to 'main' since the
+      #   last run, assessing risks before potential production deployment.
 
       - name: Generate AI Release Report
         id: ai-release
