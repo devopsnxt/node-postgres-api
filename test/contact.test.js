@@ -107,3 +107,30 @@ test('POST /contact returns conflict for duplicate email', async t => {
     assert.deepEqual(response.body, { error: 'A contact with that email already exists' });
   });
 });
+
+test('GET /contact returns 500 on database error', async t => {
+  t.mock.method(pool, 'query', async () => {
+    throw new Error('Database error');
+  });
+
+  await withServer(async server => {
+    const response = await request(server, 'GET', '/contact');
+    assert.equal(response.statusCode, 500);
+    assert.deepEqual(response.body, { error: 'Failed to fetch contacts' });
+  });
+});
+
+test('POST /contact returns 500 on database error', async t => {
+  t.mock.method(pool, 'query', async () => {
+    throw new Error('Database error');
+  });
+
+  await withServer(async server => {
+    const response = await request(server, 'POST', '/contact', {
+      name: 'Jane Doe',
+      email: 'jane@example.com'
+    });
+    assert.equal(response.statusCode, 500);
+    assert.deepEqual(response.body, { error: 'Failed to create contact' });
+  });
+});
